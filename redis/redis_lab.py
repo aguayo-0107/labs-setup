@@ -166,8 +166,13 @@ assert cluster_status == "ok", cluster_details
 assert int(cluster_details["cluster_slots_assigned"]) == 16384, cluster_details
 assert nodes_count == REDIS_TOTAL_NODES, nodes_count
 assert len(primaries) == 3, primaries
-assert len(discovered_endpoints) == len(primaries), discovered_endpoints
-assert discovered_endpoints.issubset(expected_endpoints), discovered_endpoints
+# With a load-balancing strategy configured, redis-py also discovers the
+# replicas, so the client knows every node: 3 primaries and 3 replicas.
+replicas = [
+    node for node in redis_cluster.get_nodes() if node.server_type == "replica"
+]
+assert len(replicas) == REDIS_TOTAL_NODES - len(primaries), replicas
+assert discovered_endpoints == expected_endpoints, discovered_endpoints
 validation_key = "network-mode-validation"
 validation_value = "ok"
 assert redis_cluster.set(validation_key, validation_value)
