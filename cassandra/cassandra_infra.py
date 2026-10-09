@@ -403,10 +403,16 @@ for i in range(0, CASSANDRA_TOTAL_NODES):
         ],
         "dns": DOCKER_DNS,
         "deploy": {"resources": {"limits": {"cpus": node_cpus, "memory": node_memory}}},
+        # A node is healthy only when it is Up/Normal AND accepts an authenticated
+        # CQL login: nodetool reports UN seconds before the default superuser
+        # exists, and a lab started in that window fails with "Bad credentials".
         "healthcheck": {
             "test": [
                 "CMD-SHELL",
-                f"env JVM_OPTS= nodetool -u {CASSANDRA_INIT_USER} -pw {CASSANDRA_INIT_PASSWORD} status | grep UN || exit 1",
+                f"env JVM_OPTS= nodetool -u {CASSANDRA_INIT_USER} -pw {CASSANDRA_INIT_PASSWORD} status | grep UN"
+                f" && env CQLSH_PORT={CASSANDRA_NODE_RPC_PORTS[i]} cqlsh -u {CASSANDRA_INIT_USER}"
+                f" -p {CASSANDRA_INIT_PASSWORD} -e 'SELECT release_version FROM system.local'"
+                " || exit 1",
             ],
             "interval": "5s",
             "timeout": "10s",
