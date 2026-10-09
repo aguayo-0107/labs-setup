@@ -383,7 +383,11 @@ yarn_nodemanager_vault = extract_mb(
 # Limit = Memoria del Demonio + Overhead
 NAMENODE_DOCKER_LIMIT = f"{namenode_heap + DOCKER_OVERHEAD_MB}M"
 DATANODE_DOCKER_LIMIT = f"{datanode_heap + DOCKER_OVERHEAD_MB}M"
-RESOURCEMANAGER_DOCKER_LIMIT = f"{yarn_heap + DOCKER_OVERHEAD_MB}M"
+# Jobs are submitted with `docker exec resourcemanager hadoop jar ...`, so each
+# client JVM (heap up to HADOOP_HEAPSIZE_MAX) shares the container with the
+# ResourceManager. Without that allowance the kernel OOM-killed the
+# ResourceManager after 22 streaming jobs (measured 2026-10-09).
+RESOURCEMANAGER_DOCKER_LIMIT = f"{yarn_heap + global_heap + 2 * DOCKER_OVERHEAD_MB}M"
 NODEMANAGER_DOCKER_LIMIT = f"{yarn_heap + yarn_nodemanager_vault + DOCKER_OVERHEAD_MB}M"  # El NodeManager es la suma (Memoria del Demonio + Memoria para Trabajos + Overhead)
 
 hadoop_compose_file_name = "hadoop-cluster.docker-compose.yml"
@@ -699,3 +703,25 @@ display(Markdown(f"```yaml\n{hadoop_compose_yaml_contents}\n```"))
 # %%
 # !docker compose -f hadoop-cluster.docker-compose.yml up -d --wait
 assert _exit_code == 0, "docker compose up --wait failed: a service did not become healthy"
+
+# %% [markdown]
+# Waits until every NodeManager has registered with the ResourceManager. The NodeManagers have no Compose healthcheck, so `--wait` can return while YARN still reports fewer active nodes than `HADOOP_NUM_WORKERS`; a lab started in that window fails its cluster check.
+
+# %%
+import time
+
+import requests
+
+yarn_metrics_url = f"http://{HOST_BIND_IP}:{HADOOP_RESOURCEMANAGER_WEBUI_PORT}/ws/v1/cluster/metrics"
+deadline = time.monotonic() + 300
+active_nodes = None
+while time.monotonic() < deadline:
+    try:
+        active_nodes = requests.get(yarn_metrics_url, timeout=10).json()["clusterMetrics"]["activeNodes"]
+    except (requests.RequestException, KeyError, ValueError):
+        active_nodes = None
+    if active_nodes == HADOOP_NUM_WORKERS:
+        break
+    time.sleep(5)
+assert active_nodes == HADOOP_NUM_WORKERS, f"YARN active NodeManagers: {active_nodes}, expected {HADOOP_NUM_WORKERS}"
+print(f"✅ YARN reports {active_nodes} active NodeManagers")
