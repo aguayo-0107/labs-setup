@@ -43,3 +43,29 @@ dependencies = [
     "tqdm>=4.67.1",
     "venv-pack>=0.2.0",
 ]
+
+[dependency-groups]
+dev = [
+    "coverage==7.16.2",
+    "pytest==9.1.1",
+    "pytest-cov==7.1.0",
+]
+
+[tool.pytest.ini_options]
+minversion = "9.0"
+testpaths = ["tests"]
+addopts = ["-q", "--strict-markers", "--strict-config", "--cov", "--cov-report=term-missing"]
+markers = [
+    "unit: pure rules and adapters on synthetic data",
+    "component: the audit applied to the real notebooks of this repository",
+    "live: execute infra/lab notebooks with papermill against Docker (opt-in: LABS_LIVE=1)",
+    "e2e: the command-line audit end to end, including a negative control",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["labs_audit"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 100

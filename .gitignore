@@ -70,3 +70,8 @@ redis/mount/redis-node-*
 
 # opensearch data
 opensearch/mount/*
+
+# test and coverage artifacts
+.coverage
+.coverage.*
+.pytest_cache/

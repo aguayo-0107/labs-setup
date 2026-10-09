@@ -364,7 +364,9 @@ Spark 3.5.7 requires a Java 17 runtime. Install [Eclipse Temurin 17](https://ado
 java -version
 ```
 
-The first line must report version 17. Newer Java releases are not a compatible substitute for this Spark version.
+The first line must report version 17. Newer Java releases are not a compatible substitute for this Spark version: with Java 25 the driver aborts with `JAVA_GATEWAY_EXITED` ("Enabling a Security Manager is not supported"). If several JDKs are installed (common on Linux), point the notebook kernel at Java 17 before starting Jupyter, for example `export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64`.
+
+On Linux the Spark executors run in Docker and call back to the driver on the host (`host.docker.internal`, ports `4050`–`4051`). A host firewall that drops inbound traffic from the Docker bridge networks leaves the job waiting forever with "Initial job has not accepted any resources"; allow those ports from the Docker bridges.
 
 ### 6. WireGuard (course VPN)
 
@@ -778,5 +780,6 @@ docker compose -f <name>.docker-compose.yml down -v
 - The 17 `py:percent` `.py` sources are canonical. Force source-to-notebook refreshes with `uv run jupytext --to ipynb --update <source.py>`; do not use bidirectional `--sync` for this refresh.
 - Each notebook has exactly one papermill `parameters` cell. Run every infrastructure/lab pair completely in both Local and VPN modes before declaring acceptance; Hive and Spark also require healthy Hadoop infrastructure.
 - Constants live at the top of each notebook; compose files are generated, not committed.
+- Structural audit and tests: `uv run python -m labs_audit` checks every notebook pair (one `parameters` cell with the documented defaults, the `non-relational-dbs-labs` kernel, no saved outputs, `.ipynb` identical to its `.py`, `compose up --wait` failures not ignored, no Windows-only paths) and the four Spark JAR checksums. `uv run pytest` runs `tests/{unit,component,e2e}` with 100 % branch coverage of `labs_audit`; `LABS_LIVE=1 uv run pytest tests/live` also executes every infrastructure/lab pair in Local mode with papermill.
 - Credentials are course-local defaults (documented above) — not for production use.
 - Student homework notebooks are intentionally **not** in this repository (they live in the course's internal grading repo).
