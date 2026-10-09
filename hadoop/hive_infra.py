@@ -193,28 +193,33 @@ else:
 
 
 # %% [markdown]
-# When HIVE_START_FROM_SCRATCH is set, wipes each Hive service's bind-mount directory (clearing read-only Windows files through an on_rm_error chmod handler) and recreates empty directories for fresh state.
+# When HIVE_START_FROM_SCRATCH is set, empties each Hive service's bind-mount directory through a throwaway busybox container (the files belong to container users, e.g. PostgreSQL, so the host user cannot always delete them) and makes sure every directory exists.
 
 # %%
-import shutil
-import stat
+def clear_bind_directory(path):
+    target = Path(path).resolve()
+    target.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "docker", "run", "--rm", "--mount",
+            f"type=bind,source={target},target=/target",
+            "busybox:1.36", "sh", "-c",
+            "find /target -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +",
+        ],
+        check=True,
+    )
+
 
 os.makedirs(os.path.join(DOCKER_MOUNTDIR), exist_ok=True)
-if HIVE_START_FROM_SCRATCH:
-    for container in [
-        HIVE_DB_CONTAINER_NAME,
-        HIVE_METASTORE_CONTAINER_NAME,
-        HIVE_SERVER2_CONTAINER_NAME,
-        HIVE_SCHEMA_INIT_CONTAINER_NAME,
-    ]:
-        if os.path.exists(os.path.join(DOCKER_MOUNTDIR, container)):
-
-            def on_rm_error(func, path, exc_info):
-                os.chmod(path, stat.S_IWRITE)
-                os.unlink(path)
-
-            shutil.rmtree(os.path.join(DOCKER_MOUNTDIR, container), onerror=on_rm_error)
-        os.makedirs(os.path.join(DOCKER_MOUNTDIR, container), exist_ok=True)
+for container in [
+    HIVE_DB_CONTAINER_NAME,
+    HIVE_METASTORE_CONTAINER_NAME,
+    HIVE_SERVER2_CONTAINER_NAME,
+    HIVE_SCHEMA_INIT_CONTAINER_NAME,
+]:
+    if HIVE_START_FROM_SCRATCH:
+        clear_bind_directory(os.path.join(DOCKER_MOUNTDIR, container))
+    os.makedirs(os.path.join(DOCKER_MOUNTDIR, container), exist_ok=True)
 
 # %% [markdown]
 # # Create all config files
@@ -547,7 +552,9 @@ hive_compose_dict = {
                 "POSTGRES_DB": POSTGRES_DB,
                 "PGPORT": str(HIVE_DB_INTERNAL_PORT),
             },
-            "volumes": [f".\\mount\\{HIVE_DB_CONTAINER_NAME}:/var/lib/postgresql"],
+            "volumes": [
+                f"{os.path.join(DOCKER_MOUNTDIR, HIVE_DB_CONTAINER_NAME)}:/var/lib/postgresql"
+            ],
             "networks": ["hadoop-cluster"],
             "ports": [
                 f"{HOST_BIND_IP}:{HIVE_DB_EXTERNAL_PORT}:{HIVE_DB_INTERNAL_PORT}"
