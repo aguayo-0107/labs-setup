@@ -722,6 +722,7 @@ if HIVE_START_FROM_SCRATCH:
 
 # %% vscode={"languageId": "markdown"}
 # !docker compose -f hive-cluster.docker-compose.yml up -d --wait
+assert _exit_code == 0, "docker compose up --wait failed: a service did not become healthy"
 
 # %% [markdown]
 # # Add .beeline dir to hive $HOME

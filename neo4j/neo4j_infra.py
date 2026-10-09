@@ -234,3 +234,4 @@ display(Markdown(f"```yaml\n{neo4j_compose_yaml_contents}\n```"))
 
 # %%
 # !docker compose -f neo4j.docker-compose.yml up -d --wait
+assert _exit_code == 0, "docker compose up --wait failed: a service did not become healthy"

@@ -278,6 +278,7 @@ display(Markdown(f"```yaml\n{redis_compose_yaml_contents}\n```"))
 
 # %%
 # !docker compose -f redis-cluster.docker-compose.yml up -d --wait
+assert _exit_code == 0, "docker compose up --wait failed: a service did not become healthy"
 
 # %% [markdown]
 # Bootstraps the cluster with `redis-cli --cluster create` across the six node endpoints (three primaries, three replicas), then polls CLUSTER INFO until cluster_state is ok and all six nodes are known.

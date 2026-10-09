@@ -287,6 +287,7 @@ display(Markdown(f"```yaml\n{mongodb_compose_yaml_contents}\n```"))
 
 # %%
 # !docker compose -f mongodb-cluster.docker-compose.yml up -d --wait
+assert _exit_code == 0, "docker compose up --wait failed: a service did not become healthy"
 
 # %% [markdown]
 # Initiates the replica set with `replSetInitiate` over a direct pymongo `MongoClient` connection to the first node, then polls each member's `hello` command until a PRIMARY is elected within 30 seconds and verifies via `replSetGetStatus` that the cluster reports exactly one PRIMARY and two SECONDARY members.

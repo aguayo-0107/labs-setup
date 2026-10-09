@@ -698,3 +698,4 @@ display(Markdown(f"```yaml\n{hadoop_compose_yaml_contents}\n```"))
 
 # %%
 # !docker compose -f hadoop-cluster.docker-compose.yml up -d --wait
+assert _exit_code == 0, "docker compose up --wait failed: a service did not become healthy"

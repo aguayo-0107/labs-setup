@@ -416,6 +416,7 @@ display(
 
 # %%
 # !docker compose -f mongodb-configsvr.docker-compose.yml up -d --wait
+assert _exit_code == 0, "docker compose up --wait failed: a service did not become healthy"
 
 # %% [markdown]
 # # Initialise the `config_rs` Replica Set

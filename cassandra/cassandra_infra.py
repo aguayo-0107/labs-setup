@@ -442,6 +442,7 @@ display(Markdown(f"```yaml\n{cassandra_compose_yaml_contents}\n```"))
 
 # %%
 # !docker compose -f cassandra-cluster.docker-compose.yml up -d --wait
+assert _exit_code == 0, "docker compose up --wait failed: a service did not become healthy"
 
 # %% [markdown]
 # This cell collects commented-out diagnostic commands for opening cqlsh sessions on each node and running nodetool status, describecluster, and repair operations against the cluster.

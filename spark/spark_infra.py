@@ -479,3 +479,4 @@ display(Markdown(f"```yaml\n{spark_compose_yaml_contents}\n```"))
 
 # %%
 # !docker compose -f spark-cluster.docker-compose.yml up -d --wait
+assert _exit_code == 0, "docker compose up --wait failed: a service did not become healthy"

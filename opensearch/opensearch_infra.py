@@ -198,6 +198,20 @@ for i in range(OPENSEARCH_TOTAL_NODES):
         OPENSEARCH_NODE_NAMES[i],
     )
     Path(node_mount_dir).mkdir(parents=True, exist_ok=True)
+    # Create the data directory before Compose does: a missing bind source is
+    # created by the Docker daemon as root, and OpenSearch (uid 1000 in the
+    # image) then fails with AccessDeniedException on Linux hosts. The
+    # throwaway container hands it to uid 1000 whatever the host user is.
+    node_data_dir = Path(node_mount_dir, "data").resolve()
+    node_data_dir.mkdir(exist_ok=True)
+    subprocess.run(
+        [
+            "docker", "run", "--rm", "--mount",
+            f"type=bind,source={node_data_dir},target=/target",
+            "busybox:1.36", "chown", "-R", "1000:1000", "/target",
+        ],
+        check=True,
+    )
     with open(
         os.path.join(node_mount_dir, "performance-analyzer.properties"), "w"
     ) as f:
@@ -301,3 +315,4 @@ display(Markdown(f"```yaml\n{opensearch_compose_yaml_contents}\n```"))
 
 # %%
 # !docker compose -f opensearch-cluster.docker-compose.yml up -d --wait
+assert _exit_code == 0, "docker compose up --wait failed: a service did not become healthy"
