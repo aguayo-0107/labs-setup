@@ -366,7 +366,14 @@ java -version
 
 The first line must report version 17. Newer Java releases are not a compatible substitute for this Spark version: with Java 25 the driver aborts with `JAVA_GATEWAY_EXITED` ("Enabling a Security Manager is not supported"). If several JDKs are installed (common on Linux), point the notebook kernel at Java 17 before starting Jupyter, for example `export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64`.
 
-On Linux the Spark executors run in Docker and call back to the driver on the host (`host.docker.internal`, ports `4050`–`4051`). A host firewall that drops inbound traffic from the Docker bridge networks leaves the job waiting forever with "Initial job has not accepted any resources"; allow those ports from the Docker bridges.
+On Linux the Spark executors run in Docker and call back to the driver on the host (`host.docker.internal`, ports `4050`–`4051`). A host firewall that drops inbound traffic from the Docker bridge networks leaves the job waiting forever with "Initial job has not accepted any resources"; allow those ports from the Docker bridges. Spark is the only lab that needs this: every other lab only opens connections from the host into the containers (`docker exec`, or clients on `127.0.0.1` ports), which a default-drop `INPUT` policy already allows. With plain `iptables`, open the two ports to the Docker address range only, for as long as you need them:
+
+```bash
+sudo iptables -I INPUT -s 172.16.0.0/12 -p tcp -m tcp --dport 4050:4051 -m conntrack --ctstate NEW -j ACCEPT   # open
+sudo iptables -D INPUT -s 172.16.0.0/12 -p tcp -m tcp --dport 4050:4051 -m conntrack --ctstate NEW -j ACCEPT   # close
+```
+
+A rule added this way lasts until reboot unless you also save it to your firewall's persistent configuration.
 
 ### 6. WireGuard (course VPN)
 
@@ -769,6 +776,7 @@ docker compose -f <name>.docker-compose.yml down -v
 | VPN client hostname does not resolve | Missing/stale base record or wildcard service rule | Run `nslookup <VPN_CLIENT_ALIAS>.<VPN_DOMAIN> <VPN_DNS_IP>` and `nslookup opensearch-node-1.<VPN_CLIENT_ALIAS>.<VPN_DOMAIN> <VPN_DNS_IP>`; confirm both return `VPN_HOST_IP` |
 | Port already in use | Stale container / another module | `docker compose … down -v`, or set `START_FROM_SCRATCH=True` |
 | Hive/Tez errors | Tez not loaded in HDFS | Re-run the "Load dist-lib" cell in `hive_infra.ipynb` |
+| Spark job hangs with "Initial job has not accepted any resources" | Host firewall drops the executors' callbacks to the driver on `4050`–`4051` | Allow those two ports from the Docker bridge networks (see [Java 17](#5-java-17)) |
 | Spark jobs fail on workers | Missing venv-pack env | Re-run `spark_infra.ipynb` build cells (`spark-jupyter`, `spark-job-venv`) |
 | Cassandra cluster won't form | SSL/rackdc misconfig | Re-run cert-generation cells before start |
 
