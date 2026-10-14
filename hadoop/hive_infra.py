@@ -234,14 +234,35 @@ core_site_xml_content = f"""<?xml version="1.0"?>
 </configuration>
 """
 
+# Hive's HDFS client reads HADOOP_CONF_DIR=/hive_custom_conf. Without an
+# hdfs-site.xml there it writes with Hadoop's default replication of 3, which
+# leaves every block Hive writes permanently under-replicated on this
+# cluster, so the factor is read from the running NameNode.
+HADOOP_REPLICATION = subprocess.run(
+    ["docker", "exec", HADOOP_NAMENODE_HOSTNAME, "hdfs", "getconf", "-confKey", "dfs.replication"],
+    capture_output=True, text=True, check=True,
+).stdout.strip().splitlines()[-1]
+assert HADOOP_REPLICATION.isdigit(), HADOOP_REPLICATION
+
+hdfs_site_xml_content = f"""<?xml version="1.0"?>
+<configuration>
+    <property>
+        <name>dfs.replication</name>
+        <value>{HADOOP_REPLICATION}</value>
+    </property>
+</configuration>
+"""
+
 for container in [HIVE_METASTORE_CONTAINER_NAME, HIVE_SERVER2_CONTAINER_NAME]:
     dest_dir = os.path.join(DOCKER_MOUNTDIR, container, "hive_custom_conf")
     os.makedirs(dest_dir, exist_ok=True)
     with open(os.path.join(dest_dir, "core-site.xml"), "w") as f:
         f.write(core_site_xml_content)
+    with open(os.path.join(dest_dir, "hdfs-site.xml"), "w") as f:
+        f.write(hdfs_site_xml_content)
 
 # %% [markdown]
-# Renders hive-site.xml with the metastore JDBC connection to PostgreSQL, Thrift and Web UI binds, Tez execution engine settings, scratch/staging directories, and HDFS/YARN endpoints, writing it into the custom conf directory of both hive-metastore and hive-server2.
+# Renders hive-site.xml with the metastore JDBC connection to PostgreSQL, Thrift and Web UI binds, Tez execution engine settings, scratch directories (staging stays at Hive's default `.hive-staging` next to each output: an absolute staging directory makes the query results cache point at files deleted when the query closes, so repeating a query fails with FileNotFoundException), and HDFS/YARN endpoints, writing it into the custom conf directory of both hive-metastore and hive-server2.
 
 # %%
 hive_site_xml_content = f"""<?xml version="1.0"?>
@@ -361,10 +382,6 @@ hive_site_xml_content = f"""<?xml version="1.0"?>
         <value>hdfs://{HADOOP_NAMENODE_HOSTNAME}:{HADOOP_NAMENODE_PORT}/tmp/hive/scratch</value>
     </property>
     <property>
-        <name>hive.exec.stagingdir</name>
-        <value>hdfs://{HADOOP_NAMENODE_HOSTNAME}:{HADOOP_NAMENODE_PORT}/tmp/hive/staging</value>
-    </property>
-    <property>
         <name>hive.exec.local.scratchdir</name>
         <value>/tmp/hive/local</value>
     </property>
@@ -431,10 +448,6 @@ tez_site_content = f"""<?xml version="1.0"?>
     <property>
         <name>hive.exec.scratchdir</name>
         <value>hdfs://{HADOOP_NAMENODE_HOSTNAME}:{HADOOP_NAMENODE_PORT}/tmp/hive/scratch</value>
-    </property>
-    <property>
-        <name>hive.exec.stagingdir</name>
-        <value>hdfs://{HADOOP_NAMENODE_HOSTNAME}:{HADOOP_NAMENODE_PORT}/tmp/hive/staging</value>
     </property>
     <property>
         <name>hive.exec.local.scratchdir</name>
