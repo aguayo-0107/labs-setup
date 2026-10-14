@@ -326,15 +326,22 @@ print(f"Updated p-004 stock to {updated['_source']['stock']}")
 # %%
 import time
 
+# The client spreads requests across nodes, and a node can briefly lag the
+# cluster state, so wait until both health and the shard listing agree.
 for _ in range(30):
     index_health = client.cluster.health(index=OPENSEARCH_INDEX)
-    if index_health["status"] == "green" and index_health["active_shards"] == 6:
+    shards = client.cat.shards(index=OPENSEARCH_INDEX, format="json")
+    started_count = sum(shard["state"] == "STARTED" for shard in shards)
+    if (
+        index_health["status"] == "green"
+        and index_health["active_shards"] == 6
+        and started_count == 6
+    ):
         break
     time.sleep(2)
 assert index_health["status"] == "green", index_health
 assert index_health["active_shards"] == 6, index_health
 
-shards = client.cat.shards(index=OPENSEARCH_INDEX, format="json")
 started = [shard for shard in shards if shard["state"] == "STARTED"]
 started_primaries = [shard for shard in started if shard["prirep"] == "p"]
 nodes = {shard["node"] for shard in started}

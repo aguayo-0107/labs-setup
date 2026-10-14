@@ -165,10 +165,10 @@ def clear_bind_directory(path):
     )
 
 if MONGODB_START_FROM_SCRATCH:
-    if os.path.exists(MONGODB_LOCAL_CLUSTER_KEY_PATH):
-        os.chmod(MONGODB_LOCAL_CLUSTER_KEY_PATH, stat.S_IWRITE)
-        os.remove(MONGODB_LOCAL_CLUSTER_KEY_PATH)
+    # The keyfile lives inside DOCKER_MOUNTDIR and the containers chown it to
+    # uid 999, so the host user cannot chmod it; the root cleanup removes it.
     clear_bind_directory(DOCKER_MOUNTDIR)
+    assert not os.path.exists(MONGODB_LOCAL_CLUSTER_KEY_PATH)
 
 # %% [markdown]
 # # Start mongodb-cluster.docker-compose.yml

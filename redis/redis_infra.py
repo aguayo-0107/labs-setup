@@ -323,3 +323,29 @@ for _ in range(30):
 assert "cluster_state:ok" in cluster_info, cluster_info
 assert "cluster_known_nodes:6" in cluster_info, cluster_info
 print(cluster_info)
+
+# CLUSTER SLOTS lists a replica only after its initial sync finishes, and
+# clients discover replicas from that reply, so wait until every slot range
+# reports its primary and one replica.
+import json
+
+cluster_slots_command = [
+    "docker", "exec", "redis-node-1", "redis-cli",
+    "-a", REDIS_ADMIN_PASSWORD, "-p", str(REDIS_NODE_PORTS[0]),
+    "--no-auth-warning", "--json", "cluster", "slots",
+]
+for _ in range(60):
+    cluster_slots = json.loads(
+        subprocess.run(
+            cluster_slots_command,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    )
+    if len(cluster_slots) == 3 and all(len(r) == 4 for r in cluster_slots):
+        break
+    time.sleep(2)
+assert len(cluster_slots) == 3, cluster_slots
+assert all(len(r) == 4 for r in cluster_slots), cluster_slots
+print("Replicas synchronized:", [(r[0], r[1], r[3][1]) for r in cluster_slots])

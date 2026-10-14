@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 5
 requires-python = "==3.10.*"
 
 [[package]]
@@ -540,9 +540,7 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/07/67/07ecd6d85c0f253363cbc4ac9e7dd048ca571a267fbccfea084d6009ac3b/greenlet-3.5.5-cp310-cp310-macosx_11_0_universal2.whl", hash = "sha256:816230f469381ad0a43abc9fa8dda5a699e32fb78958dde32ded93213b70a667", size = 292971, upload-time = "2026-08-10T13:28:09.837Z" },
     { url = "https://files.pythonhosted.org/packages/24/35/426733bc24247ee17bb76df90f550c299ff5f8572b2bdd7cacb5c53fd994/greenlet-3.5.5-cp310-cp310-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:a5433cf291e0ef9114bd14d0d824db6e5e4a43033234bca48181a9597acca07b", size = 609290, upload-time = "2026-08-10T14:14:32.273Z" },
     { url = "https://files.pythonhosted.org/packages/9c/dc/17d3a5acceb2fd0bbc9682a228117b719cdfb68085e6dbb33fa325755f27/greenlet-3.5.5-cp310-cp310-manylinux_2_24_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:19d59f068887d8c5907fc177f27683413ace3011b6ed646c0b309266e74a6502", size = 622650, upload-time = "2026-08-10T14:27:22.004Z" },
-    { url = "https://files.pythonhosted.org/packages/74/3f/b31e6bd6adb8f80492efb6a47e8f9cd0e7335db5aac2795b1876d5afcfee/greenlet-3.5.5-cp310-cp310-manylinux_2_24_s390x.manylinux_2_28_s390x.whl", hash = "sha256:86c5113d698cb8d927b2750bb1f1d59eefe3a37e0e0217491aee29a7f84ef52c", size = 629560, upload-time = "2026-08-10T14:30:04.733Z" },
     { url = "https://files.pythonhosted.org/packages/51/91/00b3c0566316c6f383ea16ee05388ec4f57f6e0afa49e72ae471eda8c47f/greenlet-3.5.5-cp310-cp310-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:9ff00e12102358292087274dfb1669132387ff6e7920ebf9d85f4826ce0d3a56", size = 622819, upload-time = "2026-08-10T13:40:46.562Z" },
-    { url = "https://files.pythonhosted.org/packages/18/5e/58c561efde575c4ca070030e2e0513e8d1b07b76d8a2d84a9bcef1becd42/greenlet-3.5.5-cp310-cp310-manylinux_2_39_riscv64.whl", hash = "sha256:c69bed34470abfcd456984fdadaa18e62169af4480335c45f3c32d1d9c12e638", size = 425489, upload-time = "2026-08-10T14:29:59.768Z" },
     { url = "https://files.pythonhosted.org/packages/3c/78/52de4f7ac9152ad1dbc8f437895c1e573d30ee1e1427e0f91a280e2417b6/greenlet-3.5.5-cp310-cp310-musllinux_1_2_aarch64.whl", hash = "sha256:523bb8e27614d77101ea7a8cf59f8d91219b72d5c29f6a038c92b50828bfa8d0", size = 1582164, upload-time = "2026-08-10T14:15:02.645Z" },
     { url = "https://files.pythonhosted.org/packages/f6/ff/c3855a00c2417e8f61c7b9f0bc4f8f599c6928f5c15681ad251e78a91e05/greenlet-3.5.5-cp310-cp310-musllinux_1_2_x86_64.whl", hash = "sha256:f1e2db190db51c17433eee424803818cf0670bf049d9cfe0dd07be111d1aa7c4", size = 1648807, upload-time = "2026-08-10T13:40:27.471Z" },
     { url = "https://files.pythonhosted.org/packages/70/21/d29ff6a79dbd1ec1fe74c155d25d4c5a85e221d6b9ffc2cc7a709e7c8c39/greenlet-3.5.5-cp310-cp310-win_amd64.whl", hash = "sha256:740e544169527b82695ce76af2f7ad6f030904658f2f3921a1d245771fb88cfc", size = 322832, upload-time = "2026-08-10T13:28:10.85Z" },
@@ -1257,18 +1255,6 @@ wheels = [
 ]
 
 [[package]]
-name = "neo4j-driver"
-version = "5.28.4"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "pytz" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/64/e5/139816a8b44c5bc13a705ed1dae9fea6f3ac8d97710521c366071338a6d6/neo4j_driver-5.28.4.tar.gz", hash = "sha256:a21707ebd267da3165ac66ce7dfbfb3d29cfe4ef5de6e50c6bda19975a654b39", size = 232697, upload-time = "2026-05-04T08:00:53.907Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/57/31/5eee49b9dc3fe8a2ffe77fd3fc8ee90ecfdabb21f3e11435ddabe421a3b5/neo4j_driver-5.28.4-py3-none-any.whl", hash = "sha256:de86c171496d195408b316c7c00a3bccdb26319868631eed787210035c989129", size = 314147, upload-time = "2026-05-04T08:00:50.183Z" },
-]
-
-[[package]]
 name = "neo4jrestclient"
 version = "2.1.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1312,7 +1298,6 @@ dependencies = [
     { name = "jupytext" },
     { name = "mimesis" },
     { name = "neo4j" },
-    { name = "neo4j-driver" },
     { name = "notebook" },
     { name = "openpyxl" },
     { name = "opensearch-py" },
@@ -1360,7 +1345,6 @@ requires-dist = [
     { name = "jupytext", specifier = "==1.19.5" },
     { name = "mimesis", specifier = ">=18.0.0" },
     { name = "neo4j", specifier = ">=6.0.3" },
-    { name = "neo4j-driver", specifier = ">=5.28.2" },
     { name = "notebook", specifier = "==7.6.2" },
     { name = "openpyxl", specifier = ">=3.1.5" },
     { name = "opensearch-py", specifier = "==3.0.0" },
