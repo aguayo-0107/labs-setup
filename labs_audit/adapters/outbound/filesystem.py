@@ -13,7 +13,7 @@ from ...domain.models import Cell, Notebook
 from ...domain.rules import SPARK_JARS
 from ...ports.outbound import JarStorePort, NotebookSourcePort
 
-MODULES = ("cassandra", "hadoop", "mongodb", "neo4j", "opensearch", "redis", "spark")
+MODULES = ("aws", "cassandra", "hadoop", "mongodb", "neo4j", "opensearch", "redis", "spark")
 
 
 def _notebook(path: str, node: nbformat.NotebookNode) -> Notebook:

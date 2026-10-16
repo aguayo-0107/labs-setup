@@ -46,9 +46,14 @@ uv run papermill hadoop/hive_infra.ipynb hadoop/hive_infra.executed.ipynb -p NET
 uv run papermill hadoop/hive_lab.ipynb hadoop/hive_lab.executed.ipynb -p NETWORK_MODE local
 uv run papermill spark/spark_infra.ipynb spark/spark_infra.executed.ipynb -p NETWORK_MODE local -p START_FROM_SCRATCH True
 uv run papermill spark/spark_lab.ipynb spark/spark_lab.executed.ipynb -p NETWORK_MODE local
+
+uv run papermill aws/aws_infra.ipynb aws/aws_infra.executed.ipynb -p NETWORK_MODE local -p START_FROM_SCRATCH True
+uv run papermill aws/aws_lab.ipynb aws/aws_lab.executed.ipynb -p NETWORK_MODE local
 ```
 
 Hive and Spark require healthy Hadoop infrastructure. Run `hadoop_infra.ipynb` before `hive_infra.ipynb` or `spark_infra.ipynb`.
+
+The AWS pair is self-contained (it does not use the Hadoop/Hive cluster) and uses no AWS account. Before the student lab, load `aws/mount/client/aws-lab.env` in the terminal and confirm `aws sts get-caller-identity` reports account `123456789012`.
 
 ## VPN Execution
 
@@ -87,7 +92,7 @@ Generated Compose files, state, credentials, keys, certificates, and `*.executed
 ## Acceptance Checklist
 
 - `uv sync` succeeds in the submodule environment.
-- All 17 notebooks have exactly one parameters cell and match their canonical `py:percent` sources.
+- All 19 notebooks have exactly one parameters cell and match their canonical `py:percent` sources.
 - Every `*_infra.ipynb` completes and reports healthy before its matching `*_lab.ipynb`.
 - The MongoDB config-server infrastructure notebook completes.
 - Hadoop completes before Hive and Spark; both dependent stacks complete successfully.

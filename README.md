@@ -31,6 +31,7 @@ Spin up **Cassandra · MongoDB · Hadoop · Hive · Spark · OpenSearch · Redis
    - [OpenSearch](#opensearch)
    - [Redis](#redis)
    - [Neo4j](#neo4j)
+   - [AWS (local emulator)](#aws-local-emulator)
 7. [Network modes](#network-modes)
 8. [Cluster lifecycle & cleanup](#cluster-lifecycle--cleanup)
 9. [Security notes](#security-notes)
@@ -50,7 +51,7 @@ You never hand-edit a raw Compose file. The notebooks generate them from Python 
 | | |
 |---|---|
 | **Language / tooling** | Python 3.10 · Java 17 · Jupyter · uv · Docker Compose v2 |
-| **Databases & engines** | Cassandra 5.0 · MongoDB 7.0 · Hadoop 3.4.3 · Hive 4.0.1 · Spark 3.5.7 · OpenSearch 3.4.0 · Redis 8.4 · Neo4j (ubi9) |
+| **Databases & engines** | Cassandra 5.0 · MongoDB 7.0 · Hadoop 3.4.3 · Hive 4.0.1 · Spark 3.5.7 · OpenSearch 3.4.0 · Redis 8.4 · Neo4j (ubi9) · AWS emulated locally (Moto 5.2.4 + Athena gateway) |
 | **Topology** | Distributed, multi-node, with Local loopback and alias-aware VPN client paths |
 | **Learning model** | `infra` (deploy) → `lab` (learn) notebook pairs |
 
@@ -97,6 +98,7 @@ flowchart LR
 | OpenSearch | `opensearchproject/opensearch:3.4.0` | 3 + dashboards | `opensearch_infra.ipynb` | `opensearch_lab.ipynb` |
 | Redis | `redis:8.4.0-bookworm` | 6 (cluster) | `redis_infra.ipynb` | `redis_lab.ipynb` |
 | Neo4j | `neo4j:ubi9` | 1 (+ APOC, GDS) | `neo4j_infra.ipynb` | `neo4j_lab.ipynb` |
+| AWS (local) | `motoserver/moto:5.2.4` + `apache/hive:4.0.1` + built gateway | Moto + Athena engine + Athena gateway | `aws_infra.ipynb` | `aws_lab.ipynb` |
 
 ---
 
@@ -715,6 +717,33 @@ The lab covers node/relationship creation and property-bearing relationship patt
 
 ---
 
+### AWS (local emulator)
+
+The AWS lab runs against a local emulator: **no AWS account, no credentials, no cost**. Nothing in this module can reach a real AWS account.
+
+| Component | Image | Host port | Role |
+|---|---|---|---|
+| `motoserver` | `motoserver/moto:5.2.4` | 5050 | S3, DynamoDB, IAM (AWS managed policies loaded), STS, Lambda |
+| `athena-gateway` | `labs-athena-gateway:1` (built from `aws/dockerfile.athena-gateway`) | 5051 | Athena `StartQueryExecution` / `GetQueryExecution` / `GetQueryResults` |
+| `athena-engine` | `apache/hive:4.0.1` (HiveServer2, embedded metastore, Tez local mode) | internal only | runs the Athena SQL, reading `s3://` through Hadoop's S3A connector |
+
+- `aws_infra` writes `aws/mount/client/{config,credentials,aws-lab.env,aws-lab.ps1}`. Load `aws-lab.env` (Bash: `source`) or `aws-lab.ps1` (PowerShell: `.`) before the lab: it unsets any `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN`, points `AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE` at the dummy files, and sets `AWS_ENDPOINT_URL` (Moto) and `AWS_ENDPOINT_URL_ATHENA` (gateway), which the AWS CLI v2 and boto3 honour.
+- Check before every lab: `aws sts get-caller-identity` must report account `123456789012` (Moto's fixed account). Any other account means the environment is not loaded: stop.
+- Lambda functions run for real: Moto starts each invocation in the pinned runtime image `ghcr.io/shogo82148/lambda-python@sha256:319b8cf1…` on `aws-network` and injects `AWS_ENDPOINT_URL`, so the function's own boto3 calls reach Moto. `aws_infra` pre-pulls the image.
+- The Athena gateway (`athena_gateway/`) passes SQL to HiveServer2 unchanged (Athena DDL is based in part on HiveQL DDL), writes result files to the query's S3 output location as `<QueryExecutionId>.csv` (DML) or `.txt` (DDL), and returns the column names as the first row of the first page of a SELECT. Queries run one at a time, in order.
+- Limits of the emulator, stated in the lab: Moto does not evaluate IAM policies (an unauthorised call still succeeds), and Athena-only syntax that Hive does not accept fails with Hive's message.
+- State lives in memory: recreating the stack is equivalent to a new, empty account.
+
+```mermaid
+flowchart LR
+    CLI["AWS CLI / boto3"] -->|":5050"| MOTO["motoserver"]
+    CLI -->|":5051"| GW["athena-gateway"]
+    GW --> ENG["athena-engine (HiveServer2)"]
+    ENG -->|"S3A"| MOTO
+    GW -->|"result files"| MOTO
+    MOTO -->|"docker.sock"| LAMBDA["Lambda runtime containers"]
+```
+
 ## Network modes
 
 All notebooks support exactly two lowercase execution modes. `local` is always the default; every other value is rejected. Docker/Compose is the cluster infrastructure in both modes, not a client network mode.
@@ -765,6 +794,7 @@ docker compose -f <name>.docker-compose.yml down -v
 
 - **Default credentials are course-local and public** (mongo `admin/admin`, neo4j `neo4j/password`, redis `redis/redis`, opensearch `admin/OpenSearchP455`, cassandra `cassandra/cassandra`). Do **not** expose these clusters to the public internet.
 - **Spark JupyterLab token** currently defaults to `""` (no auth) and is published on port 6888. Set `JUPYTER_LAB_TOKEN` to a strong value before exposing it beyond the VPN.
+- **The AWS emulator mounts the Docker socket** into `motoserver` so it can start Lambda containers; that grants root-equivalent control of Docker to that container. Its ports are published on `127.0.0.1` (Local) or the VPN address only.
 
 ---
 
@@ -779,15 +809,18 @@ docker compose -f <name>.docker-compose.yml down -v
 | Spark job hangs with "Initial job has not accepted any resources" | Host firewall drops the executors' callbacks to the driver on `4050`–`4051` | Allow those two ports from the Docker bridge networks (see [Java 17](#5-java-17)) |
 | Spark jobs fail on workers | Missing venv-pack env | Re-run `spark_infra.ipynb` build cells (`spark-jupyter`, `spark-job-venv`) |
 | Cassandra cluster won't form | SSL/rackdc misconfig | Re-run cert-generation cells before start |
+| `aws sts get-caller-identity` shows an account other than `123456789012`, or asks for credentials | The AWS lab environment is not loaded in this terminal | `source aws/mount/client/aws-lab.env` (or `. aws/mount/client/aws-lab.ps1`) and check again |
+| `attach-role-policy` fails with `NoSuchEntity` for an `arn:aws:iam::aws:policy/...` | Moto started without AWS managed policies | Re-run `aws_infra.ipynb` (it sets `MOTO_IAM_LOAD_MANAGED_POLICIES=true`) |
+| Athena query `FAILED` with a Hive `ParseException` | Syntax Hive does not accept (e.g. a trailing `;`) | Read `Status.StateChangeReason` from `get-query-execution` and fix the statement |
 
 ---
 
 ## Conventions & contributing
 
 - Notebook pairs: `<tech>_infra.ipynb` (deploy) + `<tech>_lab.ipynb` (learn).
-- The 17 `py:percent` `.py` sources are canonical. Force source-to-notebook refreshes with `uv run jupytext --to ipynb --update <source.py>`; do not use bidirectional `--sync` for this refresh.
+- The 19 `py:percent` `.py` sources are canonical. Force source-to-notebook refreshes with `uv run jupytext --to ipynb --update <source.py>`; do not use bidirectional `--sync` for this refresh.
 - Each notebook has exactly one papermill `parameters` cell. Run every infrastructure/lab pair completely in both Local and VPN modes before declaring acceptance; Hive and Spark also require healthy Hadoop infrastructure.
 - Constants live at the top of each notebook; compose files are generated, not committed.
-- Structural audit and tests: `uv run python -m labs_audit` checks every notebook pair (one `parameters` cell with the documented defaults, the `non-relational-dbs-labs` kernel, no saved outputs, `.ipynb` identical to its `.py`, `compose up --wait` failures not ignored, no Windows-only paths) and the four Spark JAR checksums. `uv run pytest` runs `tests/{unit,component,e2e}` with 100 % branch coverage of `labs_audit`; `LABS_LIVE=1 uv run pytest tests/live` also executes every infrastructure/lab pair in Local mode with papermill.
+- Structural audit and tests: `uv run python -m labs_audit` checks every notebook pair (one `parameters` cell with the documented defaults, the `non-relational-dbs-labs` kernel, no saved outputs, `.ipynb` identical to its `.py`, `compose up --wait` failures not ignored, no Windows-only paths) and the four Spark JAR checksums. `uv run pytest` runs `tests/{unit,component,e2e}` with 100 % branch coverage of `labs_audit` and `athena_gateway` (the e2e tier also runs `python -m athena_gateway` as a process, measured through coverage's subprocess patch); `LABS_LIVE=1 uv run pytest tests/live` also executes every infrastructure/lab pair in Local mode with papermill.
 - Credentials are course-local defaults (documented above) — not for production use.
 - Student homework notebooks are intentionally **not** in this repository (they live in the course's internal grading repo).

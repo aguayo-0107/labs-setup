@@ -41,6 +41,7 @@ dependencies = [
     "thrift-sasl>=0.4.3",
     "tqdm>=4.67.1",
     "venv-pack>=0.2.0",
+    "boto3>=1.40",
 ]
 
 [dependency-groups]
@@ -63,7 +64,9 @@ markers = [
 
 [tool.coverage.run]
 branch = true
-source = ["labs_audit"]
+source = ["labs_audit", "athena_gateway"]
+# Measure `python -m athena_gateway` when the e2e tier runs it as a process.
+patch = ["subprocess"]
 
 [tool.coverage.report]
 show_missing = true

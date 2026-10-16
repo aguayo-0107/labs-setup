@@ -38,6 +38,12 @@ These rules apply to maintainers and automation working inside this independent 
   - `antlr4-runtime-4.9.3.jar`
 - Executors run in Docker with the shipped Python environment and bundled JAR classpath. The host-side driver advertises `host.docker.internal` for executor callbacks.
 
+## AWS Contract
+
+- The AWS lab must never use a real AWS account or create billable resources. It runs only against the local emulator started by `aws/aws_infra`: Moto for S3, DynamoDB, IAM, STS and Lambda, and the Athena gateway (`athena_gateway/`) with its HiveServer2 engine.
+- Client access goes through the generated `aws/mount/client` files with dummy credentials and `AWS_ENDPOINT_URL` / `AWS_ENDPOINT_URL_ATHENA`; checks must confirm Moto's account `123456789012`.
+- Keep images pinned (`motoserver/moto:5.2.4`, `apache/hive:4.0.1`, the Lambda runtime by digest). The gateway image installs `aws/athena-gateway.requirements.txt` with `--no-deps`; those pins must equal `uv.lock` (enforced by a unit test).
+
 ## Safety
 
 - Never commit generated Compose files, generated state, executed notebooks, credentials, secrets, WireGuard private keys or client configurations, certificates, or student-identifiable data.

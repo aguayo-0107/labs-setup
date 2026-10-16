@@ -29,6 +29,7 @@ SEQUENCE = (
     ("hadoop", ("hadoop/hadoop_infra",), "hadoop/hadoop_lab"),
     ("hive", ("hadoop/hive_infra",), "hadoop/hive_lab"),
     ("spark", ("spark/spark_infra",), "spark/spark_lab"),
+    ("aws", ("aws/aws_infra",), "aws/aws_lab"),
 )
 
 

@@ -75,3 +75,6 @@ opensearch/mount/*
 .coverage
 .coverage.*
 .pytest_cache/
+
+# aws data
+aws/mount
