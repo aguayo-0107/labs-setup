@@ -70,6 +70,12 @@ if LABS_ROOT is None:
         "Could not find the labs-setup root from the current directory"
     )
 MODULE_DIR = LABS_ROOT / "hadoop"
+import sys
+
+if str(LABS_ROOT) not in sys.path:
+    sys.path.insert(0, str(LABS_ROOT))
+from labs_runtime import run_command
+
 os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
@@ -151,7 +157,7 @@ import os
 
 dataset_filename = "sales.csv"
 random.seed(2026)
-with open(dataset_filename, "w", newline="") as f:
+with open(dataset_filename, "w", newline="", encoding="utf-8") as f:
     writer = csv.writer(f)
     # Hive puede ignorar headers fácilmente, pero para simplificar la primera tabla, lo generaremos sin cabecera.
     # Formato esperado: id, producto, categoria, monto, pais
@@ -172,9 +178,9 @@ print(f"¡Dataset '{dataset_filename}' generado localmente con 50,000 filas!")
 
 # %%
 # Pasamos el archivo del host al contenedor del namenode temporalmente, y luego lo consagramos en HDFS
-# !docker exec namenode hdfs dfs -mkdir -p {HIVE_DATADIR}/external/lab_db/sales
-# !docker cp sales.csv namenode:/tmp/sales.csv
-# !docker exec namenode hdfs dfs -put -f /tmp/sales.csv {HIVE_DATADIR}/external/lab_db/sales
+run_command(["docker", "exec", "namenode", "hdfs", "dfs", "-mkdir", "-p", f"{HIVE_DATADIR}/external/lab_db/sales"], check=False)
+run_command(["docker", "cp", "sales.csv", "namenode:/tmp/sales.csv"], check=False)
+run_command(["docker", "exec", "namenode", "hdfs", "dfs", "-put", "-f", "/tmp/sales.csv", f"{HIVE_DATADIR}/external/lab_db/sales"], check=False)
 
 # %% [markdown]
 # # Hive connection test
@@ -375,5 +381,5 @@ connection.close()
 
 # %%
 # Se guarda por defecto en el 'warehouse directory' configurado en {HIVE_DATADIR}
-# !docker exec namenode hdfs dfs -ls {HIVE_DATADIR}/external/lab_db/sales
-# !docker exec namenode hdfs dfs -ls {HIVE_DATADIR}/internal/lab_db.db/sales_partitioned/
+run_command(["docker", "exec", "namenode", "hdfs", "dfs", "-ls", f"{HIVE_DATADIR}/external/lab_db/sales"], check=False)
+run_command(["docker", "exec", "namenode", "hdfs", "dfs", "-ls", f"{HIVE_DATADIR}/internal/lab_db.db/sales_partitioned/"], check=False)

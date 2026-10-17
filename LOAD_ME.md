@@ -45,15 +45,15 @@ uv run papermill hadoop/hadoop_lab.ipynb hadoop/hadoop_lab.executed.ipynb -p NET
 uv run papermill hadoop/hive_infra.ipynb hadoop/hive_infra.executed.ipynb -p NETWORK_MODE local -p START_FROM_SCRATCH True
 uv run papermill hadoop/hive_lab.ipynb hadoop/hive_lab.executed.ipynb -p NETWORK_MODE local
 uv run papermill spark/spark_infra.ipynb spark/spark_infra.executed.ipynb -p NETWORK_MODE local -p START_FROM_SCRATCH True
-uv run papermill spark/spark_lab.ipynb spark/spark_lab.executed.ipynb -p NETWORK_MODE local
+docker exec -w /opt/spark/work-dir/labs-setup spark-jupyter papermill spark/spark_lab.ipynb /tmp/spark_lab.executed.ipynb -k python3 -p NETWORK_MODE local
 
 uv run papermill aws/aws_infra.ipynb aws/aws_infra.executed.ipynb -p NETWORK_MODE local -p START_FROM_SCRATCH True
 uv run papermill aws/aws_lab.ipynb aws/aws_lab.executed.ipynb -p NETWORK_MODE local
 ```
 
-Hive and Spark require healthy Hadoop infrastructure. Run `hadoop_infra.ipynb` before `hive_infra.ipynb` or `spark_infra.ipynb`.
+Hive and Spark require healthy Hadoop infrastructure. Run `hadoop_infra.ipynb` before `hive_infra.ipynb` or `spark_infra.ipynb`. The Spark lab notebook is the Spark Driver and runs inside the `spark-jupyter` container, which mounts labs-setup read-only (its executed copy stays in the container's `/tmp`).
 
-The AWS pair is self-contained (it does not use the Hadoop/Hive cluster) and uses no AWS account. Before the student lab, load `aws/mount/client/aws-lab.env` in the terminal and confirm `aws sts get-caller-identity` reports account `123456789012`.
+The AWS pair is self-contained (it does not use the Hadoop/Hive cluster) and uses no AWS account. Students open the lab terminal with `docker exec -it aws-terminal bash`; `aws sts get-caller-identity` there reports account `123456789012`.
 
 ## VPN Execution
 

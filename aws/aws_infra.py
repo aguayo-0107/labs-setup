@@ -51,7 +51,7 @@ if re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", VPN_CLIENT_ALIAS) is None:
 VPN_CLIENT_DOMAIN = f"{VPN_CLIENT_ALIAS}.{VPN_DOMAIN}"
 
 # %% [markdown]
-# Locates the labs-setup root by walking parent directories for a pyproject.toml alongside the cassandra and mongodb module folders, then changes into the aws module directory.
+# Locates the labs-setup root by walking parent directories for a pyproject.toml alongside the cassandra and mongodb module folders, makes its `labs_runtime` helpers importable, then changes into the aws module directory.
 
 # %%
 import os
@@ -71,11 +71,17 @@ LABS_ROOT = next(
 if LABS_ROOT is None:
     raise RuntimeError("Could not find the labs-setup root from the current directory")
 MODULE_DIR = LABS_ROOT / "aws"
+import sys
+
+if str(LABS_ROOT) not in sys.path:
+    sys.path.insert(0, str(LABS_ROOT))
+from labs_runtime import run_command
+
 os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
 # %% [markdown]
-# Declares the services: Moto (S3, DynamoDB, IAM with AWS managed policies loaded, STS, Lambda) on host port 5050, the Athena gateway on 5051, and the internal HiveServer2 engine. Images are pinned; the Lambda runtime image is pinned by digest because its tag is rebuilt upstream. Credentials are dummy values: nothing here can reach a real AWS account.
+# Declares the services: Moto (S3, DynamoDB, IAM with AWS managed policies loaded, STS, Lambda) on host port 5050, the Athena gateway on 5051, the internal HiveServer2 engine, and `aws-terminal`, the student's terminal (AWS CLI v2 and the lab's Python libraries) already pointed at both. Images are pinned; the Lambda runtime image is pinned by digest because its tag is rebuilt upstream. Credentials are dummy values: nothing here can reach a real AWS account.
 
 # %%
 AWS_START_FROM_SCRATCH = START_FROM_SCRATCH
@@ -115,18 +121,24 @@ ATHENA_GATEWAY_IMAGE = "labs-athena-gateway:1"
 ATHENA_GATEWAY_INTERNAL_PORT = 8080
 ATHENA_GATEWAY_EXTERNAL_PORT = 5051
 
+AWS_TERMINAL_CONTAINER_NAME = "aws-terminal"
+AWS_TERMINAL_IMAGE = "labs-aws-terminal:1"
+AWS_TERMINAL_WORKDIR = "/workspace"
+
 MOTO_CLIENT_URL = f"http://{client_host(MOTO_CONTAINER_NAME)}:{MOTO_EXTERNAL_PORT}"
 ATHENA_CLIENT_URL = f"http://{client_host(ATHENA_GATEWAY_CONTAINER_NAME)}:{ATHENA_GATEWAY_EXTERNAL_PORT}"
 MOTO_INTERNAL_URL = f"http://{MOTO_CONTAINER_NAME}:{MOTO_INTERNAL_PORT}"
+ATHENA_INTERNAL_URL = f"http://{ATHENA_GATEWAY_CONTAINER_NAME}:{ATHENA_GATEWAY_INTERNAL_PORT}"
 print(f"Moto: {MOTO_CLIENT_URL} | Athena: {ATHENA_CLIENT_URL}")
 
 # %% [markdown]
-# Creates the bind mount directory that holds the engine's S3 configuration and the client configuration files.
+# Creates the bind mount directory that holds the engine's S3 configuration, the client configuration files, and `mount/workspace`, the folder the student edits on the host and sees as `/workspace` in `aws-terminal`.
 
 # %%
 LOCALHOST_WORKDIR = str(MODULE_DIR.resolve())
 DOCKER_MOUNTDIR = os.path.join(LOCALHOST_WORKDIR, "mount")
 Path(DOCKER_MOUNTDIR).mkdir(parents=True, exist_ok=True)
+AWS_TERMINAL_HOST_DIR = Path(DOCKER_MOUNTDIR) / "workspace"
 
 # %% [markdown]
 # # Stop aws-cluster.docker-compose.yml
@@ -183,6 +195,7 @@ ENGINE_CONF_DIR.mkdir(parents=True, exist_ok=True)
 </configuration>
 """,
     encoding="utf-8",
+    newline="\n",
 )
 print(f"Wrote {ENGINE_CONF_DIR / 'core-site.xml'}")
 
@@ -194,10 +207,11 @@ CLIENT_DIR = Path(DOCKER_MOUNTDIR) / "client"
 CLIENT_DIR.mkdir(parents=True, exist_ok=True)
 CLIENT_CONFIG = CLIENT_DIR / "config"
 CLIENT_CREDENTIALS = CLIENT_DIR / "credentials"
-CLIENT_CONFIG.write_text(f"[default]\nregion = {AWS_REGION}\noutput = json\n", encoding="utf-8")
+CLIENT_CONFIG.write_text(f"[default]\nregion = {AWS_REGION}\noutput = json\n", encoding="utf-8", newline="\n")
 CLIENT_CREDENTIALS.write_text(
     f"[default]\naws_access_key_id = {AWS_DUMMY_KEY_ID}\naws_secret_access_key = {AWS_DUMMY_SECRET}\n",
     encoding="utf-8",
+    newline="\n",
 )
 CLIENT_ENV = {
     "AWS_CONFIG_FILE": str(CLIENT_CONFIG),
@@ -212,11 +226,13 @@ UNSET = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")
     "".join(f"unset {name}\n" for name in UNSET)
     + "".join(f"export {name}='{value}'\n" for name, value in CLIENT_ENV.items()),
     encoding="utf-8",
+    newline="\n",
 )
 (CLIENT_DIR / "aws-lab.ps1").write_text(
     "".join(f"Remove-Item Env:{name} -ErrorAction SilentlyContinue\n" for name in UNSET)
     + "".join(f"$env:{name} = '{value}'\n" for name, value in CLIENT_ENV.items()),
     encoding="utf-8",
+    newline="\n",
 )
 print((CLIENT_DIR / "aws-lab.env").read_text(encoding="utf-8"))
 
@@ -224,7 +240,7 @@ print((CLIENT_DIR / "aws-lab.env").read_text(encoding="utf-8"))
 # Pulls the pinned Lambda runtime image now, so that the first `aws lambda invoke` does not stall on a download.
 
 # %%
-pull = subprocess.run(["docker", "pull", "-q", LAMBDA_RUNTIME_IMAGE], capture_output=True, text=True)
+pull = subprocess.run(["docker", "pull", "-q", LAMBDA_RUNTIME_IMAGE], capture_output=True, text=True, encoding="utf-8")
 print(pull.stdout.strip())
 assert pull.returncode == 0, pull.stderr
 
@@ -313,35 +329,59 @@ aws_compose_dict = {
                 "start_period": "5s",
             },
         },
+        AWS_TERMINAL_CONTAINER_NAME: {
+            "image": AWS_TERMINAL_IMAGE,
+            "build": {"context": str(LABS_ROOT), "dockerfile": "aws/dockerfile.aws-terminal"},
+            "container_name": AWS_TERMINAL_CONTAINER_NAME,
+            # On Linux and macOS the terminal runs as the host user, so files it
+            # writes in /workspace stay editable on the host; Docker Desktop on
+            # Windows maps ownership itself.
+            **({"user": f"{os.getuid()}:{os.getgid()}"} if hasattr(os, "getuid") else {}),
+            "environment": {
+                "AWS_ENDPOINT_URL": MOTO_INTERNAL_URL,
+                "AWS_ENDPOINT_URL_ATHENA": ATHENA_INTERNAL_URL,
+                "AWS_ACCESS_KEY_ID": AWS_DUMMY_KEY_ID,
+                "AWS_SECRET_ACCESS_KEY": AWS_DUMMY_SECRET,
+                "AWS_DEFAULT_REGION": AWS_REGION,
+                "AWS_PAGER": "",
+            },
+            "volumes": [f"{AWS_TERMINAL_HOST_DIR}:{AWS_TERMINAL_WORKDIR}"],
+            "working_dir": AWS_TERMINAL_WORKDIR,
+            "networks": [AWS_NETWORK_NAME],
+            "dns": DOCKER_DNS,
+            "depends_on": {ATHENA_GATEWAY_CONTAINER_NAME: {"condition": "service_healthy"}},
+            "healthcheck": {
+                "test": ["CMD", "aws", "sts", "get-caller-identity"],
+                "interval": "5s",
+                "timeout": "10s",
+                "retries": 24,
+                "start_period": "5s",
+            },
+        },
     },
     "networks": {AWS_NETWORK_NAME: {"name": AWS_NETWORK_NAME, "driver": "bridge"}},
 }
 
 aws_compose_yaml_path = os.path.join(LOCALHOST_WORKDIR, "aws-cluster.docker-compose.yml")
 aws_compose_yaml_contents = yaml.dump(aws_compose_dict, default_flow_style=False, sort_keys=False, indent=4)
-with open(aws_compose_yaml_path, "w") as f:
+with open(aws_compose_yaml_path, "w", encoding="utf-8", newline="\n") as f:
     f.write(aws_compose_yaml_contents)
 print(f"Successfully created: '{os.path.relpath(aws_compose_yaml_path)}'")
 display(Markdown(f"```yaml\n{aws_compose_yaml_contents}\n```"))
 
 # %% [markdown]
-# Builds the Athena gateway image from `aws/dockerfile.athena-gateway` (exact versions from labs-setup's uv.lock).
+# Builds the Athena gateway image (`aws/dockerfile.athena-gateway`) and the student terminal (`aws/dockerfile.aws-terminal`: the signature-verified, checksum-pinned AWS CLI v2 installer plus exact versions from labs-setup's uv.lock). The workspace folder is created here, before Compose could create it as root.
 
 # %%
-build = subprocess.run(
-    ["docker", "compose", "-f", "aws-cluster.docker-compose.yml", "build", ATHENA_GATEWAY_CONTAINER_NAME],
-    capture_output=True,
-    text=True,
-)
-print(build.stdout[-2000:])
-assert build.returncode == 0, build.stderr[-4000:]
+AWS_TERMINAL_HOST_DIR.mkdir(parents=True, exist_ok=True)
+run_command(["docker", "compose", "-f", "aws-cluster.docker-compose.yml", "build",
+             ATHENA_GATEWAY_CONTAINER_NAME, AWS_TERMINAL_CONTAINER_NAME])
 
 # %% [markdown]
 # Starts the stack in detached mode with `--wait`: Moto, then the engine (beeline `SELECT 1`), then the gateway (`/health`) must pass their healthchecks.
 
 # %%
-# !docker compose -f aws-cluster.docker-compose.yml up -d --wait
-assert _exit_code == 0, "docker compose up --wait failed: a service did not become healthy"
+run_command(["docker", "compose", "-f", "aws-cluster.docker-compose.yml", "up", "-d", "--wait"])
 
 # %% [markdown]
 # Smoke test through the same endpoints the students use: STS answers with Moto's fixed account (never a real one); a Lambda function writes to DynamoDB from its own runtime container; and an Athena table over an S3 object returns its row count. Everything it creates is deleted.
@@ -434,6 +474,12 @@ dynamodb.delete_table(TableName=smoke)
 for item in s3.list_objects_v2(Bucket=smoke).get("Contents", []):
     s3.delete_object(Bucket=smoke, Key=item["Key"])
 s3.delete_bucket(Bucket=smoke)
-print("AWS lab environment ready. Before the lab, run in your terminal:")
-print(f"  source {CLIENT_DIR / 'aws-lab.env'}      # Bash")
-print(f"  . {CLIENT_DIR / 'aws-lab.ps1'}           # PowerShell")
+terminal = subprocess.run(
+    ["docker", "exec", AWS_TERMINAL_CONTAINER_NAME, "aws", "sts", "get-caller-identity", "--query", "Account", "--output", "text"],
+    capture_output=True, text=True, encoding="utf-8",
+)
+assert terminal.returncode == 0 and terminal.stdout.strip() == MOTO_ACCOUNT_ID, terminal
+print(f"aws-terminal -> STS account {terminal.stdout.strip()} (Moto)")
+print("AWS lab environment ready. Open the lab terminal with:")
+print(f"  docker exec -it {AWS_TERMINAL_CONTAINER_NAME} bash")
+print(f"Files in {AWS_TERMINAL_HOST_DIR} appear in {AWS_TERMINAL_WORKDIR}.")

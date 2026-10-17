@@ -70,6 +70,12 @@ if LABS_ROOT is None:
         "Could not find the labs-setup root from the current directory"
     )
 MODULE_DIR = LABS_ROOT / "hadoop"
+import sys
+
+if str(LABS_ROOT) not in sys.path:
+    sys.path.insert(0, str(LABS_ROOT))
+from labs_runtime import run_command
+
 os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
@@ -243,8 +249,8 @@ if HADOOP_START_FROM_SCRATCH or not os.path.exists(dataset_dest_path):
 #
 
 # %%
-# !docker exec namenode hdfs dfs -mkdir -p {HADOOP_HDFS_DATADIR}/input
-# !docker exec namenode hdfs dfs -rm -r -f {HADOOP_HDFS_DATADIR}/output
+run_command(["docker", "exec", "namenode", "hdfs", "dfs", "-mkdir", "-p", f"{HADOOP_HDFS_DATADIR}/input"], check=False)
+run_command(["docker", "exec", "namenode", "hdfs", "dfs", "-rm", "-r", "-f", f"{HADOOP_HDFS_DATADIR}/output"], check=False)
 print("HDFS environment initialized.")
 
 # %% [markdown]
@@ -252,15 +258,15 @@ print("HDFS environment initialized.")
 #
 
 # %%
-# !docker exec namenode hdfs dfs -put -f {HADOOP_WORKDIR}/data.csv {HADOOP_HDFS_DATADIR}/input/
-# !docker exec namenode hdfs dfs -ls {HADOOP_HDFS_DATADIR}/input
+run_command(["docker", "exec", "namenode", "hdfs", "dfs", "-put", "-f", f"{HADOOP_WORKDIR}/data.csv", f"{HADOOP_HDFS_DATADIR}/input/"], check=False)
+run_command(["docker", "exec", "namenode", "hdfs", "dfs", "-ls", f"{HADOOP_HDFS_DATADIR}/input"], check=False)
 
 # %% [markdown]
 # ### Check block locations and replication across datanodes
 #
 
 # %%
-# !docker exec namenode hdfs fsck {HADOOP_HDFS_DATADIR}/input/data.csv -files -blocks -locations
+run_command(["docker", "exec", "namenode", "hdfs", "fsck", f"{HADOOP_HDFS_DATADIR}/input/data.csv", "-files", "-blocks", "-locations"], check=False)
 
 # %% [markdown]
 # ### Generate mapper and reducer scripts
@@ -288,7 +294,7 @@ for line in sys.stdin:
         print("%s\\t%s" % (category, amount))
 """
 
-with open(os.path.join(DOCKER_MOUNTDIR,"resourcemanager", "work-dir",'mapper.py'), 'w') as mapper_file:
+with open(os.path.join(DOCKER_MOUNTDIR,"resourcemanager", "work-dir",'mapper.py'), 'w', encoding="utf-8", newline="\n") as mapper_file:
     mapper_file.write(mapper_file_contents)
 print("Mapper script created")
 
@@ -324,11 +330,11 @@ if current_category:
     print("%s\\t%.2f" % (current_category, current_sum))
 """
 
-with open(os.path.join(DOCKER_MOUNTDIR,"resourcemanager", "work-dir",'reducer.py'), 'w') as reducer_file:
+with open(os.path.join(DOCKER_MOUNTDIR,"resourcemanager", "work-dir",'reducer.py'), 'w', encoding="utf-8", newline="\n") as reducer_file:
     reducer_file.write(reducer_file_contents)
 print("Reducer script created")
 
-# !docker exec resourcemanager ls -l {HADOOP_WORKDIR}
+run_command(["docker", "exec", "resourcemanager", "ls", "-l", f"{HADOOP_WORKDIR}"], check=False)
 
 # %% [markdown]
 # ### Count directly in namenode for validation
@@ -345,7 +351,7 @@ shutil.copy(
     ),
     os.path.join(DOCKER_MOUNTDIR, "namenode", "work-dir", "reducer.py"),
 )
-# !docker exec namenode bash -c "cat {HADOOP_WORKDIR}/data.csv | python {HADOOP_WORKDIR}/mapper.py | sort | python {HADOOP_WORKDIR}/reducer.py"
+run_command(["docker", "exec", "namenode", "bash", "-c", f"cat {HADOOP_WORKDIR}/data.csv | python {HADOOP_WORKDIR}/mapper.py | sort | python {HADOOP_WORKDIR}/reducer.py"], check=False)
 
 # %% [markdown]
 # # Hadoop map reduce
@@ -353,7 +359,7 @@ shutil.copy(
 
 # %%
 # 1. Ensure the output directory is clean
-# !docker exec namenode hdfs dfs -rm -r -f {HADOOP_HDFS_DATADIR}/output
+run_command(["docker", "exec", "namenode", "hdfs", "dfs", "-rm", "-r", "-f", f"{HADOOP_HDFS_DATADIR}/output"], check=False)
 
 # 2. Submit the job from the ResourceManager to Nodemanagers
 import subprocess
@@ -374,20 +380,21 @@ mapreduce_job = subprocess.run(
     capture_output=True,
     text=True,
     timeout=300,
+    encoding="utf-8",
 )
 print(mapreduce_job.stdout)
 assert mapreduce_job.returncode == 0, mapreduce_job.stderr[-4000:]
 
 # 3. Show output file
-# !docker exec namenode hdfs dfs -ls {HADOOP_HDFS_DATADIR}/output
+run_command(["docker", "exec", "namenode", "hdfs", "dfs", "-ls", f"{HADOOP_HDFS_DATADIR}/output"], check=False)
 
 # %% [markdown]
 # Merges the MapReduce output part-files into a single file in the container's work-dir and sorts it into output_sorted.csv.
 
 # %%
 # 4. Merge and sort output
-# !docker exec namenode hdfs dfs -getmerge {HADOOP_HDFS_DATADIR}/output {HADOOP_WORKDIR}/output.csv
-# !docker exec namenode bash -c "cat {HADOOP_WORKDIR}/output.csv | sort > {HADOOP_WORKDIR}/output_sorted.csv"
+run_command(["docker", "exec", "namenode", "hdfs", "dfs", "-getmerge", f"{HADOOP_HDFS_DATADIR}/output", f"{HADOOP_WORKDIR}/output.csv"], check=False)
+run_command(["docker", "exec", "namenode", "bash", "-c", f"cat {HADOOP_WORKDIR}/output.csv | sort > {HADOOP_WORKDIR}/output_sorted.csv"], check=False)
 
 # %% [markdown]
 # Reads output_sorted.csv back from the namenode container and validates the MapReduce result: non-empty output where every category row carries a tab-separated aggregate value.
@@ -400,6 +407,7 @@ output = subprocess.run(
     check=True,
     capture_output=True,
     text=True,
+    encoding="utf-8",
 ).stdout.strip()
 assert output, "MapReduce output is empty"
 assert "\t" in output, output[:200]

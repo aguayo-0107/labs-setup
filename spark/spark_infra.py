@@ -47,7 +47,7 @@ if (
 VPN_CLIENT_DOMAIN = f"{VPN_CLIENT_ALIAS}.{VPN_DOMAIN}"
 
 # %% [markdown]
-# Locates the labs-setup root by walking parent directories for a pyproject.toml alongside the cassandra and mongodb module folders, then changes into the spark module directory.
+# Locates the labs-setup root by walking parent directories for a pyproject.toml alongside the cassandra and mongodb module folders, makes its `labs_runtime` helpers importable, then changes into the spark module directory.
 
 # %%
 # Resolve module assets from the labs-setup root.
@@ -70,6 +70,12 @@ if LABS_ROOT is None:
         "Could not find the labs-setup root from the current directory"
     )
 MODULE_DIR = LABS_ROOT / "spark"
+import sys
+
+if str(LABS_ROOT) not in sys.path:
+    sys.path.insert(0, str(LABS_ROOT))
+from labs_runtime import run_command
+
 os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
@@ -118,6 +124,8 @@ SPARK_WORKER_IPS = [
 SPARK_WORKER_WEBUI_PORTS = [6080 + (i + 1) for i in range(SPARK_TOTAL_WORKERS)]
 
 SPARK_WORKDIR = "/opt/spark/work-dir"
+# Shown in JupyterLab's file browser as labs-setup/ (read-only).
+SPARK_LABS_SETUP_DIR = f"{SPARK_WORKDIR}/labs-setup"
 
 JUPYTER_LAB_NAME = "spark-jupyter"
 JUPYTER_LAB_HOSTNAME = JUPYTER_LAB_NAME
@@ -202,8 +210,10 @@ if SPARK_START_FROM_SCRATCH :
 import os
 from IPython.display import Markdown, display
 
+# Exact versions: the lab notebooks run inside this image (it is the Spark
+# Driver), and papermill executes spark_lab.ipynb here for acceptance runs.
 dockerfile_spark_jupyter_python_packages = (
-    "pyspark==3.5.7 delta-spark==3.2.0 jupyterlab pandas pyarrow"
+    "pyspark==3.5.7 delta-spark==3.2.0 jupyterlab==4.6.4 pandas==2.3.3 pyarrow==25.0.1 faker==40.36.0 papermill==2.7.0"
 )
 
 dockerfile_spark_jupyter_name = "dockerfile.spark-jupyter"
@@ -232,7 +242,8 @@ CMD ["jupyter", "lab", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--allow-r
 """
 
 with open(
-    os.path.join(LOCALHOST_WORKDIR, dockerfile_spark_jupyter_name), "w"
+    os.path.join(LOCALHOST_WORKDIR, dockerfile_spark_jupyter_name), "w",
+    encoding="utf-8", newline="\n",
 ) as spark_compose_yaml_file:
     spark_compose_yaml_file.write(dockerfile_spark_jupyter_contents.strip())
 
@@ -245,7 +256,7 @@ display(Markdown(f"```dockerfile\n{dockerfile_spark_jupyter_contents}\n```"))
 # Builds the spark-jupyter image from dockerfile.spark-jupyter, tagging it as SPARK_JUPYTER_LAB_DOCKER_TAG.
 
 # %%
-# !docker build -t {SPARK_JUPYTER_LAB_DOCKER_TAG} -f dockerfile.spark-jupyter .
+run_command(["docker", "build", "-t", f"{SPARK_JUPYTER_LAB_DOCKER_TAG}", "-f", "dockerfile.spark-jupyter", "."], check=False)
 
 # %% [markdown]
 # ### Build spark-job-venv
@@ -267,7 +278,7 @@ RUN mkdir -p {SPARK_JOB_VENV_BUILD_DIR} && \\
         {SPARK_JOB_VENV_BUILD_DIR}/spark_job_env/bin/venv-pack -p spark_job_env -o spark_job_env.tar.gz
 """
 
-with open(os.path.join(LOCALHOST_WORKDIR, dockerfile_spark_job_venv_name), "w") as spark_compose_yaml_file:
+with open(os.path.join(LOCALHOST_WORKDIR, dockerfile_spark_job_venv_name), "w", encoding="utf-8", newline="\n") as spark_compose_yaml_file:
     spark_compose_yaml_file.write(dockerfile_spark_job_venv_contents.strip())
 
 print(f"Successfully created: '{os.path.relpath(os.path.join(LOCALHOST_WORKDIR,dockerfile_spark_jupyter_name))}'")
@@ -281,10 +292,10 @@ from pathlib import Path
 path = Path(DOCKER_MOUNTDIR)
 path.mkdir(parents=True, exist_ok=True)
 
-# !docker build -t {SPARK_JOB_VENV_DOCKER_TAG} -f dockerfile.spark-job-venv .
-# !docker create --name spark-job-venv {SPARK_JOB_VENV_DOCKER_TAG}
-# !docker cp spark-job-venv:{SPARK_JOB_VENV_BUILD_DIR}/spark_job_env.tar.gz "{DOCKER_MOUNTDIR}/{SPARK_SHARED_WORKSPACE}/spark_job_env.tar.gz"
-# !docker rm spark-job-venv
+run_command(["docker", "build", "-t", f"{SPARK_JOB_VENV_DOCKER_TAG}", "-f", "dockerfile.spark-job-venv", "."], check=False)
+run_command(["docker", "create", "--name", "spark-job-venv", f"{SPARK_JOB_VENV_DOCKER_TAG}"], check=False)
+run_command(["docker", "cp", f"spark-job-venv:{SPARK_JOB_VENV_BUILD_DIR}/spark_job_env.tar.gz", f"{DOCKER_MOUNTDIR}/{SPARK_SHARED_WORKSPACE}/spark_job_env.tar.gz"], check=False)
+run_command(["docker", "rm", "spark-job-venv"], check=False)
 
 # %% [markdown]
 # # Build Spark images and create spark-cluster.docker-compose.yml
@@ -380,6 +391,8 @@ spark_compose_dict = {
                 f"{os.path.join(DOCKER_MOUNTDIR,SPARK_SHARED_WORKSPACE)}:{SPARK_SHARED_WORKSPACE_DIR}",
                 f"{os.path.join(DOCKER_MOUNTDIR,JUPYTER_LAB_NAME)}:{SPARK_WORKDIR}",
                 f"{SPARK_VSCODE_SERVER_DIR}:/root/.vscode-server",
+                # labs-setup itself, read-only, so spark_lab.ipynb runs here.
+                f"{LABS_ROOT}:{SPARK_LABS_SETUP_DIR}:ro",
             ]
             + SPARK_MOUNT_JARS,
             "networks": ["spark-cluster"],
@@ -468,7 +481,7 @@ spark_compose_yaml_path = os.path.join(
 spark_compose_yaml_contents = yaml.dump(
     spark_compose_dict, default_flow_style=False, sort_keys=False, indent=4
 )
-with open(spark_compose_yaml_path, "w") as spark_compose_yaml_file:
+with open(spark_compose_yaml_path, "w", encoding="utf-8", newline="\n") as spark_compose_yaml_file:
     spark_compose_yaml_file.write(spark_compose_yaml_contents)
 
 print(f"Successfully created: '{os.path.relpath(spark_compose_yaml_path)}'")
@@ -478,5 +491,4 @@ display(Markdown(f"```yaml\n{spark_compose_yaml_contents}\n```"))
 # Starts the full Spark cluster (spark-master, the three workers, and spark-jupyter) in detached mode with `docker compose up -d --wait`, blocking until every healthcheck passes.
 
 # %%
-# !docker compose -f spark-cluster.docker-compose.yml up -d --wait
-assert _exit_code == 0, "docker compose up --wait failed: a service did not become healthy"
+run_command(["docker", "compose", "-f", "spark-cluster.docker-compose.yml", "up", "-d", "--wait"])

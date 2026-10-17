@@ -377,3 +377,37 @@ def test_composition_root_wires_the_concrete_adapters():
     finally:
         server.shutdown()
         runner.shutdown()
+
+
+def test_a_stop_before_the_loop_starts_makes_serve_forever_return_without_the_socket():
+    """SIGTERM can arrive between launch and serve_forever: the loop must not
+    start on the closed socket (it raised "Invalid file descriptor: -1")."""
+    from athena_gateway import __main__ as root
+
+    server, runner = root.build({"ATHENA_GATEWAY_BIND": "127.0.0.1", "ATHENA_GATEWAY_PORT": "0",
+                                 "S3_ENDPOINT_URL": "http://127.0.0.1:9"})
+    try:
+        server.shutdown()
+        server.serve_forever()  # returns at once instead of raising
+        assert server._server.fileno() == -1
+    finally:
+        runner.shutdown()
+
+
+def test_a_stop_while_serving_ends_the_loop_and_closes_the_socket():
+    import threading
+
+    from athena_gateway import __main__ as root
+
+    server, runner = root.build({"ATHENA_GATEWAY_BIND": "127.0.0.1", "ATHENA_GATEWAY_PORT": "0",
+                                 "S3_ENDPOINT_URL": "http://127.0.0.1:9"})
+    loop = threading.Thread(target=server.serve_forever, daemon=True)
+    loop.start()
+    try:
+        server.shutdown()
+        loop.join(10)
+        assert not loop.is_alive()
+        assert server._server.fileno() == -1
+    finally:
+        runner.shutdown()
+

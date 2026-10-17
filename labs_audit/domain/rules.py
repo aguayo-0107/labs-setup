@@ -3,14 +3,18 @@
 The rules encode the contracts in AGENTS.md: one papermill parameters cell
 with the documented defaults, the dedicated kernel, no committed outputs,
 `.ipynb` derived from the canonical `.py`, Spark's four checksum-pinned JARs,
-and two Linux portability defects found on 2026-10-08 (an ignored
-`compose up --wait` failure and Windows-only path separators).
+and operating-system portability: no Windows-only path separators, no IPython
+shell escapes (a `!` line runs in `cmd.exe` on Windows and `/bin/sh`
+elsewhere, so quoting, globs and pipes differ), and text I/O that produces the
+same bytes on every system (explicit encoding, explicit newline on writes,
+explicit encoding when subprocess output is decoded, never `shell=True`).
 """
 
 from __future__ import annotations
 
+import ast
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 
 from .models import Finding, Notebook
 
@@ -32,8 +36,8 @@ SPARK_JARS: Mapping[str, str] = {
     "antlr4-runtime-4.9.3.jar": "131a6594969bc4f321d652ea2a33bc0e378ca312685ef87791b2c60b29d01ea5",
 }
 
-_COMPOSE_WAIT = re.compile(r"^!docker compose -f \S+ up -d --wait\s*$", re.M)
-_EXIT_CHECK = "assert _exit_code == 0"
+_SHELL_ESCAPE = re.compile(r"^\s*(!|%%(bash|sh|script|system)\b|%(sx|system)\b)", re.M)
+_SUBPROCESS_CALLS = {"run", "Popen", "check_output", "check_call", "call"}
 _WINDOWS_PATH = re.compile(r"""["']\.\\\\|\\\\mount\\\\""")
 
 
@@ -74,14 +78,68 @@ def in_sync(committed: Notebook, canonical: Notebook) -> list[Finding]:
     return [Finding("sync", committed.path, "differs from its canonical .py source")]
 
 
-def compose_wait_checked(nb: Notebook) -> list[Finding]:
+def no_shell_escapes(nb: Notebook) -> list[Finding]:
+    return [
+        Finding("shell-escape", nb.path, f"cell {index} runs a command through the OS shell; use run_command([...])")
+        for index, cell in enumerate(nb.cells)
+        if cell.cell_type == "code" and _SHELL_ESCAPE.search(cell.source)
+    ]
+
+
+def _keywords(call: ast.Call) -> dict[str, ast.expr]:
+    return {item.arg: item.value for item in call.keywords if item.arg is not None}
+
+
+def _constant(node: ast.expr | None) -> object:
+    return node.value if isinstance(node, ast.Constant) else None
+
+
+def _io_problems(call: ast.Call) -> Iterator[str]:
+    function = call.func
+    name = function.attr if isinstance(function, ast.Attribute) else getattr(function, "id", None)
+    keywords = _keywords(call)
+    if isinstance(function, ast.Name) and name == "open":
+        mode = _constant(call.args[1] if len(call.args) > 1 else keywords.get("mode")) or "r"
+        if isinstance(mode, str) and "b" not in mode:
+            if "encoding" not in keywords:
+                yield "open() without encoding="
+            if set(mode) & set("wax+") and "newline" not in keywords:
+                yield "open() for writing without newline="
+    elif isinstance(function, ast.Attribute) and name == "write_text":
+        for required in ("encoding", "newline"):
+            if required not in keywords:
+                yield f"write_text() without {required}="
+    elif isinstance(function, ast.Attribute) and name == "read_text" and "encoding" not in keywords:
+        yield "read_text() without encoding="
+    elif (
+        isinstance(function, ast.Attribute)
+        and name in _SUBPROCESS_CALLS
+        and getattr(function.value, "id", None) == "subprocess"
+    ):
+        if _constant(keywords.get("shell")) is True:
+            yield f"subprocess.{name}() with shell=True"
+        decodes = any(_constant(keywords.get(key)) is True for key in ("text", "universal_newlines"))
+        if decodes and "encoding" not in keywords:
+            yield f"subprocess.{name}() decodes output without encoding="
+
+
+def portable_io(nb: Notebook) -> list[Finding]:
     findings: list[Finding] = []
     for index, cell in enumerate(nb.cells):
-        match = _COMPOSE_WAIT.search(cell.source) if cell.cell_type == "code" else None
-        if match and _EXIT_CHECK not in cell.source[match.end():]:
-            findings.append(
-                Finding("compose-wait", nb.path, f"cell {index} ignores the exit status of compose --wait")
-            )
+        if cell.cell_type != "code" or cell.source.lstrip().startswith("%%"):
+            continue
+        source = "\n".join("" if line.lstrip().startswith("%") else line for line in cell.source.splitlines())
+        try:
+            tree = ast.parse(source)
+        except SyntaxError as error:
+            findings.append(Finding("portable-io", nb.path, f"cell {index} is not valid Python: {error.msg}"))
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                findings.extend(
+                    Finding("portable-io", nb.path, f"cell {index} line {node.lineno}: {problem}")
+                    for problem in _io_problems(node)
+                )
     return findings
 
 
@@ -104,4 +162,4 @@ def jar_checksums(actual: Mapping[str, str | None]) -> list[Finding]:
     return findings
 
 
-NOTEBOOK_RULES = (parameters_cell, kernel, no_outputs, compose_wait_checked, no_windows_paths)
+NOTEBOOK_RULES = (parameters_cell, kernel, no_outputs, no_shell_escapes, no_windows_paths, portable_io)

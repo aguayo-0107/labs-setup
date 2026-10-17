@@ -34,7 +34,12 @@ class HttpGatewayServer(InboundServer):
         handler = self._handler_for(protocol)
         self._server = ThreadingHTTPServer((host, port), handler)
         self._server.daemon_threads = True
-        self._serving = threading.Event()
+        # Starting and stopping decide under one lock, so a stop that arrives
+        # before the loop starts (e.g. SIGTERM right after launch) can never
+        # close the socket under a loop about to use it.
+        self._lock = threading.Lock()
+        self._serving = False
+        self._stopped = False
 
     @classmethod
     def _handler_for(cls, protocol: ProtocolAdapter) -> type[BaseHTTPRequestHandler]:
@@ -71,12 +76,18 @@ class HttpGatewayServer(InboundServer):
         return str(host), int(port)
 
     def serve_forever(self) -> None:
-        self._serving.set()
+        with self._lock:
+            if self._stopped:
+                return
+            self._serving = True
         self._server.serve_forever(poll_interval=0.2)
 
     def shutdown(self) -> None:
-        # socketserver's shutdown() waits for a running serve_forever loop and
-        # would block forever on a server that was built but never served.
-        if self._serving.is_set():
+        with self._lock:
+            self._stopped = True
+            serving = self._serving
+        # socketserver's shutdown() waits for the serve_forever loop to exit; a
+        # server that never started serving has no loop to wait for.
+        if serving:
             self._server.shutdown()
         self._server.server_close()

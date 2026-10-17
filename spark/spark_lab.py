@@ -46,105 +46,35 @@ if (
 VPN_CLIENT_DOMAIN = f"{VPN_CLIENT_ALIAS}.{VPN_DOMAIN}"
 
 # %% [markdown]
-# Locates the `labs-setup` project root by searching upward for the directory that contains both `pyproject.toml` and the lab module folders, then changes the working directory into the `spark` module so relative asset paths resolve consistently.
+# Declares the Spark cluster topology. This notebook runs inside the `spark-jupyter` container (open it in JupyterLab at port 6888, or execute it there with papermill), so the Driver lives on the same Docker network as the master, the workers and HDFS: every address below is a container name on that network, identical in Local and VPN mode, and no connection ever goes back to the host computer.
 
 # %%
-# Resolve module assets from the labs-setup root.
 import os
 from pathlib import Path
 
-_start = Path.cwd().resolve()
-LABS_ROOT = next(
-    (
-        candidate
-        for candidate in (_start, *_start.parents)
-        if (candidate / "pyproject.toml").is_file()
-        and (candidate / "cassandra").is_dir()
-        and (candidate / "mongodb").is_dir()
-    ),
-    None,
-)
-if LABS_ROOT is None:
-    raise RuntimeError(
-        "Could not find the labs-setup root from the current directory"
-    )
-MODULE_DIR = LABS_ROOT / "spark"
-os.chdir(MODULE_DIR)
-print(f"Working directory: {MODULE_DIR}")
-
-# %% [markdown]
-# Declares the Spark cluster topology and mode-aware endpoints: image tags, master/worker names, client hosts (`127.0.0.1` in local mode, `*.VPN_CLIENT_DOMAIN` in VPN mode), Web UI ports, driver callback host (`host.docker.internal`, since executors run in Docker while this notebook driver runs on the host), executor environment paths, and the shared workspace mount.
-
-# %%
-DOCKER_INTERNAL_HOST = "host.docker.internal"
-SPARK_LOCAL_HDFS_HOST = "namenode.lvh.me"
-
-SPARK_DOCKER_BASE = "spark:3.5.7-scala2.12-java17-python3-ubuntu"
-SPARK_JUPYTER_LAB_DOCKER_TAG = "spark-jupyter:3.5.7-scala2.12-java17-python3-ubuntu"
-SPARK_JOB_VENV_DOCKER_TAG = "spark-job-venv:3.5.7-scala2.12-java17-python3-ubuntu"
-SPARK_JOB_VENV_BUILD_DIR = "/opt/spark/venv-build"
 SPARK_EXECUTOR_ENV_DIR = "/opt/spark/executor-env"
 
-SPARK_MASTER_NAME = "spark-master"
-SPARK_MASTER_HOSTNAME = SPARK_MASTER_NAME
-SPARK_MASTER_CLIENT_HOST = (
-    "127.0.0.1"
-    if NETWORK_MODE == "local"
-    else f"{SPARK_MASTER_NAME}.{VPN_CLIENT_DOMAIN}"
-)
-SPARK_MASTER_WUBUI_PORT = 6080
+SPARK_MASTER_HOST = "spark-master-internal"
 SPARK_MASTER_PORT = 6077
 
-SPARK_TOTAL_WORKERS = 3
-SPARK_WORKER_NAMES = [f"spark-worker-{i+1}" for i in range(SPARK_TOTAL_WORKERS)]
-SPARK_WORKER_HOSTNAMES = SPARK_WORKER_NAMES
-SPARK_WORKER_IPS = [
-    f"{name}.{VPN_CLIENT_DOMAIN}" if NETWORK_MODE == "vpn" else "127.0.0.1"
-    for name in SPARK_WORKER_NAMES
-]
-SPARK_WORKER_WEBUI_PORTS = [6080 + (i + 1) for i in range(SPARK_TOTAL_WORKERS)]
+# Workers reach the Driver by this container name.
+SPARK_DRIVER_HOST = "spark-jupyter"
+SPARK_DRIVER_PORT = 4050
+SPARK_BLOCK_MANAGER_PORT = 4051
 
-SPARK_WORKDIR = "/opt/spark/work-dir"
-
-JUPYTER_LAB_NAME = "spark-jupyter"
-JUPYTER_LAB_HOSTNAME = JUPYTER_LAB_NAME
-JUPYTER_LAB_CLIENT_HOST = (
-    "127.0.0.1"
-    if NETWORK_MODE == "local"
-    else f"{JUPYTER_LAB_NAME}.{VPN_CLIENT_DOMAIN}"
-)
-# Executors run in Docker while this notebook driver runs on the host.
-SPARK_DRIVER_HOST = DOCKER_INTERNAL_HOST
-JUPYTER_LAB_PORT = 6888
-JUPYTER_LAB_MONITOR_PORT = 4040
-JUPYTER_LAB_TOKEN = ""
-
-SPARK_SHARED_WORKSPACE = "shared-workspace"
-SPARK_SHARED_WORKSPACE_DIR = f"/opt/spark/{SPARK_SHARED_WORKSPACE}"
-
-# %% [markdown]
-# Derives the mode-aware HDFS URI: local mode reaches the NameNode through the split-horizon name `namenode.lvh.me`, VPN mode through `namenode.<VPN_CLIENT_DOMAIN>`, both on RPC port 8020.
-
-# %%
 HADOOP_NAMENODE_HOSTNAME = "namenode"
 HADOOP_NAMENODE_PORT = 8020
-SPARK_HDFS_HOST = (
-    SPARK_LOCAL_HDFS_HOST
-    if NETWORK_MODE == "local"
-    else f"{HADOOP_NAMENODE_HOSTNAME}.{VPN_CLIENT_DOMAIN}"
-)
-SPARK_HDFS_URI = f"hdfs://{SPARK_HDFS_HOST}:{HADOOP_NAMENODE_PORT}"
-
-# %% [markdown]
-# Creates the host-side shared workspace directory that is bind-mounted into the Spark containers and defines the `SPARK_DATADIR` HDFS path where the lab datasets will be written.
-
-# %%
-import os
-from pathlib import Path
-
-SPARK_HOST_SHARED_WORKSPACE = MODULE_DIR / "mount" / SPARK_SHARED_WORKSPACE
-SPARK_HOST_SHARED_WORKSPACE.mkdir(parents=True, exist_ok=True)
+SPARK_HDFS_URI = f"hdfs://{HADOOP_NAMENODE_HOSTNAME}:{HADOOP_NAMENODE_PORT}"
 SPARK_DATADIR = f"{SPARK_HDFS_URI}/spark-lab/data"
+
+# Mounted into every Spark container by spark_infra.
+SPARK_SHARED_WORKSPACE_DIR = Path("/opt/spark/shared-workspace")
+SPARK_JARS_DIR = Path("/opt/spark/course-jars")
+if not SPARK_JARS_DIR.is_dir():
+    raise RuntimeError("Run this notebook inside the spark-jupyter container (JupyterLab on port 6888)")
+# Hive support writes derby.log and metastore_db/ into the working directory;
+# labs-setup is mounted read-only, the container's work-dir is writable.
+os.chdir("/opt/spark/work-dir")
 
 # %% [markdown]
 # ##### Cleaning Spark context
@@ -172,15 +102,8 @@ from pyspark.sql import SparkSession
 from datetime import datetime
 
 os.environ["HADOOP_USER_NAME"] = "hadoop"
-java_security_option = "-Djava.security.manager=allow"
-java_tool_options = os.environ.get("JAVA_TOOL_OPTIONS", "")
-if java_security_option not in java_tool_options.split():
-    os.environ["JAVA_TOOL_OPTIONS"] = f"{java_tool_options} {java_security_option}".strip()
 
-SPARK_DRIVER_PORT = 4050
-SPARK_BLOCK_MANAGER_PORT = 4051
-SPARK_JOB_ARCHIVE = SPARK_HOST_SHARED_WORKSPACE / "spark_job_env.tar.gz"
-SPARK_JARS_DIR = MODULE_DIR / "jars"
+SPARK_JOB_ARCHIVE = SPARK_SHARED_WORKSPACE_DIR / "spark_job_env.tar.gz"
 SPARK_JARS = {
     "iceberg-spark-runtime-3.5_2.12-1.6.1.jar": "87e7184f31ef0caac415bbdfcf1bc4943346a58b98d747dc83434f7139e12acb",
     "delta-spark_2.12-3.2.0.jar": "51d473537d1bc10c81f48b03d8e2a6b604e1b421a70835ec12e917a4245a31d5",
@@ -198,16 +121,12 @@ for jar_name, expected_sha256 in SPARK_JARS.items():
             f"expected {expected_sha256}, got {actual_sha256}"
         )
 
-SPARK_DRIVER_CLASSPATH = os.pathsep.join(
-    str(SPARK_JARS_DIR / jar_name) for jar_name in SPARK_JARS
-)
-SPARK_EXECUTOR_CLASSPATH = ":".join(
-    f"/opt/spark/course-jars/{jar_name}" for jar_name in SPARK_JARS
-)
+# Driver and executors read the same mounted JARs.
+SPARK_CLASSPATH = ":".join(str(SPARK_JARS_DIR / jar_name) for jar_name in SPARK_JARS)
 SPARK_ICEBERG_WAREHOUSE = f"{SPARK_HDFS_URI}/spark-lab/iceberg-warehouse"
 assert SPARK_JOB_ARCHIVE.is_file(), SPARK_JOB_ARCHIVE
 builder = (
-    SparkSession.builder.master(f"spark://{SPARK_MASTER_CLIENT_HOST}:{SPARK_MASTER_PORT}")
+    SparkSession.builder.master(f"spark://{SPARK_MASTER_HOST}:{SPARK_MASTER_PORT}")
     .appName(f"SparkLab_{datetime.now().strftime('%Y-%m-%d_%H:%M:%S.%f')}")
     .config("spark.driver.host", SPARK_DRIVER_HOST)
     .config("spark.driver.bindAddress", "0.0.0.0")
@@ -215,11 +134,10 @@ builder = (
     .config("spark.blockManager.port", SPARK_BLOCK_MANAGER_PORT)
     .config("spark.driver.memory", "512m")
     .config("spark.driver.maxResultSize", "256m")
-    .config("spark.task.maxDirectResultSize", "64m")
     .config("spark.sql.session.timeZone", "UTC")
     .config("spark.hadoop.dfs.client.use.datanode.hostname", "true")
-    .config("spark.driver.extraClassPath", SPARK_DRIVER_CLASSPATH)
-    .config("spark.executor.extraClassPath", SPARK_EXECUTOR_CLASSPATH)
+    .config("spark.driver.extraClassPath", SPARK_CLASSPATH)
+    .config("spark.executor.extraClassPath", SPARK_CLASSPATH)
     .config(
         "spark.executorEnv.PYSPARK_PYTHON",
         f"{SPARK_EXECUTOR_ENV_DIR}/bin/python3",

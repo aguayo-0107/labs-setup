@@ -73,19 +73,74 @@ def test_in_sync_ignores_trailing_whitespace():
     assert rules.in_sync(nb(code("a")), nb(code("b")))[0].rule == "sync"
 
 
-def test_compose_wait_checked():
-    wait = "!docker compose -f x.yml up -d --wait"
+def test_no_shell_escapes():
     cells = [
-        code(f"{wait}\nassert _exit_code == 0, 'x'"),
-        code(wait),
-        code(f"assert _exit_code == 0\n{wait}"),
-        code("!docker compose -f x.yml up -d"),
-        Cell("markdown", wait),
+        code("!docker compose -f x.yml up -d --wait"),
+        code("x = 1\n  !ls"),
+        code("%%bash\nls"),
+        code("%sx ls"),
+        code("%system ls"),
+        code('run_command(["docker", "ps"])\n# !docker ps is only a comment'),
+        code("%%sql\nSELECT 1"),
+        code("y = a != b"),
+        Cell("markdown", "!docker ps"),
     ]
-    assert [f.detail for f in rules.compose_wait_checked(nb(*cells))] == [
-        "cell 1 ignores the exit status of compose --wait",
-        "cell 2 ignores the exit status of compose --wait",
+    assert [f.detail for f in rules.no_shell_escapes(nb(*cells))] == [
+        f"cell {i} runs a command through the OS shell; use run_command([...])" for i in range(5)
     ]
+
+
+class TestPortableIo:
+    def details(self, *sources):
+        return [f.detail for f in rules.portable_io(nb(*(code(s) for s in sources)))]
+
+    def test_compliant_calls_pass(self):
+        assert self.details(
+            'open(p, encoding="utf-8")',
+            'open(p, "w", encoding="utf-8", newline="\\n")',
+            'open(p, mode="a", encoding="utf-8", newline="")',
+            'open(p, "rb")',
+            'open(p, "wb")',
+            'Path(p).write_text(t, encoding="utf-8", newline="\\n")',
+            'Path(p).read_text(encoding="utf-8")',
+            'subprocess.run(["ls"], capture_output=True, text=True, encoding="utf-8")',
+            'subprocess.run(["ls"], capture_output=True)',
+            'other.run(["ls"], text=True)',
+            'print(open)',
+            "%%sql\nSELECT 1",
+            "%matplotlib inline\nx = 1",
+        ) == []
+
+    def test_each_problem_is_reported(self):
+        assert self.details(
+            "open(p)",
+            'open(p, "w", encoding="utf-8")',
+            'open(p, mode="x+")',
+            'Path(p).write_text(t)',
+            'Path(p).read_text()',
+            'subprocess.check_output(["ls"], universal_newlines=True)',
+            'subprocess.Popen("ls", shell=True)',
+            'subprocess.run(\n  ["ls"],\n  text=True,\n)',
+            "open(p, mode)",
+        ) == [
+            "cell 0 line 1: open() without encoding=",
+            "cell 1 line 1: open() for writing without newline=",
+            "cell 2 line 1: open() without encoding=",
+            "cell 2 line 1: open() for writing without newline=",
+            "cell 3 line 1: write_text() without encoding=",
+            "cell 3 line 1: write_text() without newline=",
+            "cell 4 line 1: read_text() without encoding=",
+            "cell 5 line 1: subprocess.check_output() decodes output without encoding=",
+            "cell 6 line 1: subprocess.Popen() with shell=True",
+            "cell 7 line 1: subprocess.run() decodes output without encoding=",
+            "cell 8 line 1: open() without encoding=",
+        ]
+
+    def test_unparseable_cell(self):
+        assert self.details("def (") == ["cell 0 is not valid Python: invalid syntax"]
+
+    def test_markdown_is_ignored(self):
+        assert rules.portable_io(nb(Cell("markdown", "open(p)"))) == []
 
 
 def test_no_windows_paths():

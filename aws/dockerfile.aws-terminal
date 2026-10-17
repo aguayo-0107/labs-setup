@@ -1,0 +1,23 @@
+# Terminal for the AWS lab: AWS CLI v2 and the lab's Python libraries, pointed
+# at the local emulator. The student's files live in /workspace, a folder of
+# the host. Build context: labs-setup root.
+FROM python:3.10.18-slim-bookworm
+ARG TARGETARCH
+
+COPY aws/aws_terminal_install.py /tmp/aws_terminal_install.py
+RUN python /tmp/aws_terminal_install.py "${TARGETARCH}" \
+    && /tmp/aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli \
+    && rm -rf /tmp/aws /tmp/aws_terminal_install.py \
+    && aws --version
+
+COPY aws/aws-terminal.requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir --no-deps -r /tmp/requirements.txt \
+    && python -c "import boto3, pandas, faker" \
+    && rm /tmp/requirements.txt
+
+# Any uid can run the terminal: the infra notebook runs it as the host user
+# so that files written to /workspace stay editable on the host.
+RUN mkdir -p /home/lab /workspace && chmod 1777 /home/lab /workspace
+ENV HOME=/home/lab
+WORKDIR /workspace
+CMD ["sleep", "infinity"]

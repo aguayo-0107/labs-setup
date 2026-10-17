@@ -50,7 +50,7 @@ You never hand-edit a raw Compose file. The notebooks generate them from Python 
 
 | | |
 |---|---|
-| **Language / tooling** | Python 3.10 · Java 17 · Jupyter · uv · Docker Compose v2 |
+| **Language / tooling** | Python 3.10 · Jupyter · uv · Docker Compose v2 (Java 17 and the AWS CLI run inside containers) |
 | **Databases & engines** | Cassandra 5.0 · MongoDB 7.0 · Hadoop 3.4.3 · Hive 4.0.1 · Spark 3.5.7 · OpenSearch 3.4.0 · Redis 8.4 · Neo4j (ubi9) · AWS emulated locally (Moto 5.2.4 + Athena gateway) |
 | **Topology** | Distributed, multi-node, with Local loopback and alias-aware VPN client paths |
 | **Learning model** | `infra` (deploy) → `lab` (learn) notebook pairs |
@@ -358,24 +358,15 @@ Verify on any OS:
 uv --version   # e.g. uv 0.12.5
 ```
 
-### 5. Java 17
+### 5. Operating system notes
 
-Spark 3.5.7 requires a Java 17 runtime. Install [Eclipse Temurin 17](https://adoptium.net/temurin/releases/?version=17) and verify:
+The labs run the same on Windows, macOS and Linux. Everything that depends on a shell runs inside Linux containers; the only commands typed in a terminal of your own computer are single-line `docker`, `uv` or `python` commands that mean the same thing in PowerShell, `cmd`, bash and zsh. Neither Java nor the AWS CLI is installed on your computer: Spark's Java 17 and the AWS CLI v2 ship in the lab images.
 
-```bash
-java -version
-```
-
-The first line must report version 17. Newer Java releases are not a compatible substitute for this Spark version: with Java 25 the driver aborts with `JAVA_GATEWAY_EXITED` ("Enabling a Security Manager is not supported"). If several JDKs are installed (common on Linux), point the notebook kernel at Java 17 before starting Jupyter, for example `export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64`.
-
-On Linux the Spark executors run in Docker and call back to the driver on the host (`host.docker.internal`, ports `4050`–`4051`). A host firewall that drops inbound traffic from the Docker bridge networks leaves the job waiting forever with "Initial job has not accepted any resources"; allow those ports from the Docker bridges. Spark is the only lab that needs this: every other lab only opens connections from the host into the containers (`docker exec`, or clients on `127.0.0.1` ports), which a default-drop `INPUT` policy already allows. With plain `iptables`, open the two ports to the Docker address range only, for as long as you need them:
-
-```bash
-sudo iptables -I INPUT -s 172.16.0.0/12 -p tcp -m tcp --dport 4050:4051 -m conntrack --ctstate NEW -j ACCEPT   # open
-sudo iptables -D INPUT -s 172.16.0.0/12 -p tcp -m tcp --dport 4050:4051 -m conntrack --ctstate NEW -j ACCEPT   # close
-```
-
-A rule added this way lasts until reboot unless you also save it to your firewall's persistent configuration.
+| System | Notes |
+|---|---|
+| **Windows** | Docker Desktop with the WSL 2 backend. Use PowerShell (Windows Terminal or the VS Code terminal) for the host commands. Git keeps every text file with LF line endings (`.gitattributes`), so scripts mounted into containers work. |
+| **macOS** | Docker Desktop. On Apple Silicon, `apache/hadoop:3.4.3` exists only for `linux/amd64`; the Hadoop notebook declares that platform and Docker Desktop runs it under emulation (enable *Use Rosetta for x86_64/amd64 emulation* in Settings → General for speed). All other images include `arm64`. |
+| **Linux** | Docker Engine with the Compose plugin. Containers reach your computer only through published ports on `127.0.0.1`; no inbound firewall rule is needed. |
 
 ### 6. WireGuard (course VPN)
 
@@ -429,7 +420,7 @@ wg show
 |---|---|
 | Docker | Docker Desktop (Windows/macOS) or Docker Engine + Compose plugin (Linux) — see setup section |
 | Python | **3.10** (installed automatically by `uv`, see `.python-version`) |
-| Java | **17** for Spark 3.5.7 |
+| Java | not needed on your computer: the Spark images ship Java 17 |
 | uv | ≥ 0.12.5 (see setup section) |
 | Jupyter | installed via `uv sync` (pulls `ipykernel`) |
 | VPN access | membership to the course VPN, domain `vpn.itam.mx` (WireGuard — see setup section) |
@@ -644,7 +635,7 @@ Spark 3.5.7 (Scala 2.12, Java 17, Python 3) with a **custom-built** JupyterLab i
 - Base image `apache/spark:3.5.7-scala2.12-java17-python3-ubuntu`
 - Custom images: `dockerfile.spark-jupyter`, `dockerfile.spark-job-venv`
 - Tracked, pinned, SHA-256-validated JARs: `iceberg-spark-runtime-3.5_2.12-1.6.1.jar`, `delta-spark_2.12-3.2.0.jar`, `delta-storage-3.2.0.jar`, `antlr4-runtime-4.9.3.jar`
-- The host-side Spark driver binds callback ports 4050/4051 and advertises `host.docker.internal`; executors use the shipped `venv-pack` Python environment and bundled classpath inside Docker.
+- The Spark Driver is the notebook kernel inside `spark-jupyter` (JupyterLab on port `6888`): it reaches `spark-master-internal:6077` and `hdfs://namenode:8020` on the Docker network and the workers connect back to `spark-jupyter:4050`/`4051` there, so no connection goes to your computer. labs-setup is mounted read-only at `/opt/spark/work-dir/labs-setup`; run `spark_lab.ipynb` from it in JupyterLab, or with papermill as in `LOAD_ME.md`. Executors use the shipped `venv-pack` Python environment and the bundled classpath.
 - Shared workspace `/opt/spark/shared-workspace`
 
 ```mermaid
@@ -726,9 +717,12 @@ The AWS lab runs against a local emulator: **no AWS account, no credentials, no 
 | `motoserver` | `motoserver/moto:5.2.4` | 5050 | S3, DynamoDB, IAM (AWS managed policies loaded), STS, Lambda |
 | `athena-gateway` | `labs-athena-gateway:1` (built from `aws/dockerfile.athena-gateway`) | 5051 | Athena `StartQueryExecution` / `GetQueryExecution` / `GetQueryResults` |
 | `athena-engine` | `apache/hive:4.0.1` (HiveServer2, embedded metastore, Tez local mode) | internal only | runs the Athena SQL, reading `s3://` through Hadoop's S3A connector |
+| `aws-terminal` | `labs-aws-terminal:1` (built from `aws/dockerfile.aws-terminal`) | none | the student's terminal: AWS CLI v2.36.17 plus boto3, pandas and Faker at the versions of `uv.lock`, already pointed at the emulator |
 
-- `aws_infra` writes `aws/mount/client/{config,credentials,aws-lab.env,aws-lab.ps1}`. Load `aws-lab.env` (Bash: `source`) or `aws-lab.ps1` (PowerShell: `.`) before the lab: it unsets any `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN`, points `AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE` at the dummy files, and sets `AWS_ENDPOINT_URL` (Moto) and `AWS_ENDPOINT_URL_ATHENA` (gateway), which the AWS CLI v2 and boto3 honour.
-- Check before every lab: `aws sts get-caller-identity` must report account `123456789012` (Moto's fixed account). Any other account means the environment is not loaded: stop.
+- Students open the lab terminal with `docker exec -it aws-terminal bash`. It has dummy credentials and `AWS_ENDPOINT_URL` (Moto) / `AWS_ENDPOINT_URL_ATHENA` (gateway), which the AWS CLI v2 and boto3 honour, and it cannot see any `~/.aws` of your computer. Its `/workspace` is `aws/mount/workspace` on your computer, so lab files can be edited with any editor; on Linux and macOS it runs as your user so those files stay yours.
+- The AWS CLI v2 installer is the official `awscli-exe-linux-<arch>-2.36.17.zip`, checked against a pinned SHA-256 per architecture whose AWS CLI Team PGP signature was verified (key `FB5D B77F D5C1 18B8 0511 ADA8 A631 0ACC 4672 475C`).
+- `aws_infra` also writes `aws/mount/client/{config,credentials,aws-lab.env,aws-lab.ps1}` for host-side clients such as `aws_lab.ipynb`: they unset exported AWS keys, point `AWS_CONFIG_FILE` / `AWS_SHARED_CREDENTIALS_FILE` at dummy files and set the two endpoint variables.
+- Check before every lab: `aws sts get-caller-identity` must report account `123456789012` (Moto's fixed account). Any other account means you are not in the lab terminal: stop.
 - Lambda functions run for real: Moto starts each invocation in the pinned runtime image `ghcr.io/shogo82148/lambda-python@sha256:319b8cf1…` on `aws-network` and injects `AWS_ENDPOINT_URL`, so the function's own boto3 calls reach Moto. `aws_infra` pre-pulls the image.
 - The Athena gateway (`athena_gateway/`) passes SQL to HiveServer2 unchanged (Athena DDL is based in part on HiveQL DDL), writes result files to the query's S3 output location as `<QueryExecutionId>.csv` (DML) or `.txt` (DDL), and returns the column names as the first row of the first page of a SELECT. Queries run one at a time, in order.
 - Limits of the emulator, stated in the lab: Moto does not evaluate IAM policies (an unauthorised call still succeeds), and Athena-only syntax that Hive does not accept fails with Hive's message.
@@ -806,10 +800,10 @@ docker compose -f <name>.docker-compose.yml down -v
 | VPN client hostname does not resolve | Missing/stale base record or wildcard service rule | Run `nslookup <VPN_CLIENT_ALIAS>.<VPN_DOMAIN> <VPN_DNS_IP>` and `nslookup opensearch-node-1.<VPN_CLIENT_ALIAS>.<VPN_DOMAIN> <VPN_DNS_IP>`; confirm both return `VPN_HOST_IP` |
 | Port already in use | Stale container / another module | `docker compose … down -v`, or set `START_FROM_SCRATCH=True` |
 | Hive/Tez errors | Tez not loaded in HDFS | Re-run the "Load dist-lib" cell in `hive_infra.ipynb` |
-| Spark job hangs with "Initial job has not accepted any resources" | Host firewall drops the executors' callbacks to the driver on `4050`–`4051` | Allow those two ports from the Docker bridge networks (see [Java 17](#5-java-17)) |
+| Spark notebook stops with "Run this notebook inside the spark-jupyter container" | It was opened in a Jupyter on your computer | Open JupyterLab at `http://127.0.0.1:6888` and run it there |
 | Spark jobs fail on workers | Missing venv-pack env | Re-run `spark_infra.ipynb` build cells (`spark-jupyter`, `spark-job-venv`) |
 | Cassandra cluster won't form | SSL/rackdc misconfig | Re-run cert-generation cells before start |
-| `aws sts get-caller-identity` shows an account other than `123456789012`, or asks for credentials | The AWS lab environment is not loaded in this terminal | `source aws/mount/client/aws-lab.env` (or `. aws/mount/client/aws-lab.ps1`) and check again |
+| `aws sts get-caller-identity` shows an account other than `123456789012`, or asks for credentials | The command ran outside the lab terminal | Open it with `docker exec -it aws-terminal bash` and check again |
 | `attach-role-policy` fails with `NoSuchEntity` for an `arn:aws:iam::aws:policy/...` | Moto started without AWS managed policies | Re-run `aws_infra.ipynb` (it sets `MOTO_IAM_LOAD_MANAGED_POLICIES=true`) |
 | Athena query `FAILED` with a Hive `ParseException` | Syntax Hive does not accept (e.g. a trailing `;`) | Read `Status.StateChangeReason` from `get-query-execution` and fix the statement |
 
@@ -821,6 +815,6 @@ docker compose -f <name>.docker-compose.yml down -v
 - The 19 `py:percent` `.py` sources are canonical. Force source-to-notebook refreshes with `uv run jupytext --to ipynb --update <source.py>`; do not use bidirectional `--sync` for this refresh.
 - Each notebook has exactly one papermill `parameters` cell. Run every infrastructure/lab pair completely in both Local and VPN modes before declaring acceptance; Hive and Spark also require healthy Hadoop infrastructure.
 - Constants live at the top of each notebook; compose files are generated, not committed.
-- Structural audit and tests: `uv run python -m labs_audit` checks every notebook pair (one `parameters` cell with the documented defaults, the `non-relational-dbs-labs` kernel, no saved outputs, `.ipynb` identical to its `.py`, `compose up --wait` failures not ignored, no Windows-only paths) and the four Spark JAR checksums. `uv run pytest` runs `tests/{unit,component,e2e}` with 100 % branch coverage of `labs_audit` and `athena_gateway` (the e2e tier also runs `python -m athena_gateway` as a process, measured through coverage's subprocess patch); `LABS_LIVE=1 uv run pytest tests/live` also executes every infrastructure/lab pair in Local mode with papermill.
+- Structural audit and tests: `uv run python -m labs_audit` checks every notebook pair (one `parameters` cell with the documented defaults, the `non-relational-dbs-labs` kernel, no saved outputs, `.ipynb` identical to its `.py`, no IPython `!` shell lines, text I/O with explicit `encoding=` and, on writes, `newline=`, no `shell=True`, no Windows-only paths) and the four Spark JAR checksums. Notebooks run commands with `labs_runtime.run_command([...])`, an argument list that reaches the program unchanged on every operating system. `uv run pytest` runs `tests/{unit,component,e2e}` with 100 % branch coverage of `labs_audit`, `athena_gateway` and `labs_runtime` (the e2e tier also runs `python -m athena_gateway` as a process, measured through coverage's subprocess patch); `LABS_LIVE=1 uv run pytest tests/live` also executes every infrastructure/lab pair in Local mode with papermill.
 - Credentials are course-local defaults (documented above) — not for production use.
 - Student homework notebooks are intentionally **not** in this repository (they live in the course's internal grading repo).

@@ -69,6 +69,12 @@ if LABS_ROOT is None:
         "Could not find the labs-setup root from the current directory"
     )
 MODULE_DIR = LABS_ROOT / "mongodb"
+import sys
+
+if str(LABS_ROOT) not in sys.path:
+    sys.path.insert(0, str(LABS_ROOT))
+from labs_runtime import run_command
+
 os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
@@ -182,7 +188,7 @@ import secrets
 from IPython.display import Markdown, display
 
 if not os.path.exists(MONGODB_LOCAL_CLUSTER_KEY_PATH):
-    with open(MONGODB_LOCAL_CLUSTER_KEY_PATH, "w") as f:
+    with open(MONGODB_LOCAL_CLUSTER_KEY_PATH, "w", encoding="utf-8", newline="\n") as f:
         raw_data = secrets.token_bytes(756)
         f.write(base64.b64encode(raw_data).decode("utf-8"))
 
@@ -276,7 +282,7 @@ mongodb_compose_yaml_path = os.path.join(
 mongodb_compose_yaml_contents = yaml.dump(
     mongodb_compose_dict, default_flow_style=False, sort_keys=False, indent=4
 )
-with open(mongodb_compose_yaml_path, "w") as f:
+with open(mongodb_compose_yaml_path, "w", encoding="utf-8", newline="\n") as f:
     f.write(mongodb_compose_yaml_contents)
 
 (print(f"Successfully created: '{os.path.relpath(mongodb_compose_yaml_path)}'"),)
@@ -286,8 +292,7 @@ display(Markdown(f"```yaml\n{mongodb_compose_yaml_contents}\n```"))
 # Brings up the three `mongod` services defined in `mongodb-cluster.docker-compose.yml` in detached mode and waits until every healthcheck reports healthy.
 
 # %%
-# !docker compose -f mongodb-cluster.docker-compose.yml up -d --wait
-assert _exit_code == 0, "docker compose up --wait failed: a service did not become healthy"
+run_command(["docker", "compose", "-f", "mongodb-cluster.docker-compose.yml", "up", "-d", "--wait"])
 
 # %% [markdown]
 # Initiates the replica set with `replSetInitiate` over a direct pymongo `MongoClient` connection to the first node, then polls each member's `hello` command until a PRIMARY is elected within 30 seconds and verifies via `replSetGetStatus` that the cluster reports exactly one PRIMARY and two SECONDARY members.

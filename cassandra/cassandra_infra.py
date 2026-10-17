@@ -70,6 +70,12 @@ if LABS_ROOT is None:
         "Could not find the labs-setup root from the current directory"
     )
 MODULE_DIR = LABS_ROOT / "cassandra"
+import sys
+
+if str(LABS_ROOT) not in sys.path:
+    sys.path.insert(0, str(LABS_ROOT))
+from labs_runtime import run_command
+
 os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
@@ -206,7 +212,8 @@ for i in range(0, CASSANDRA_TOTAL_NODES):
         )
     ):
         with open(
-            os.path.join(LOCALHOST_WORKDIR, "cassandra.yaml"), "r"
+            os.path.join(LOCALHOST_WORKDIR, "cassandra.yaml"), "r",
+            encoding="utf-8",
         ) as cassandra_config_source_file:
             cassandra_config = yaml.load(
                 cassandra_config_source_file, Loader=yaml.FullLoader
@@ -246,6 +253,7 @@ for i in range(0, CASSANDRA_TOTAL_NODES):
                     "cassandra.yaml",
                 ),
                 "w",
+                encoding="utf-8", newline="\n",
             ) as node_cassandra_yaml_file:
                 yaml.dump(
                     cassandra_config,
@@ -331,7 +339,7 @@ node_memory = "1G"
 node_start_heap = "256M"
 node_max_heap = "768M"
 jmx_pass_path = os.path.join(DOCKER_MOUNTDIR, "jmxremote.password")
-with open(jmx_pass_path, "w") as f:
+with open(jmx_pass_path, "w", encoding="utf-8", newline="\n") as f:
     f.write(f"{CASSANDRA_INIT_USER} {CASSANDRA_INIT_USER}")
 
 cassandra_compose_dict = {
@@ -431,7 +439,7 @@ cassandra_compose_yaml_path = os.path.join(
 cassandra_compose_yaml_contents = yaml.dump(
     cassandra_compose_dict, default_flow_style=False, sort_keys=False, indent=4
 )
-with open(cassandra_compose_yaml_path, "w") as f:
+with open(cassandra_compose_yaml_path, "w", encoding="utf-8", newline="\n") as f:
     f.write(cassandra_compose_yaml_contents)
 
 print(f"Successfully created: '{os.path.relpath(cassandra_compose_yaml_path)}'")
@@ -441,8 +449,7 @@ display(Markdown(f"```yaml\n{cassandra_compose_yaml_contents}\n```"))
 # This cell writes jmxremote.password and builds the complete cassandra_compose_dict — one service per node with JVM options, bind-mounted volumes, port bindings on HOST_BIND_IP, DNS settings, resource limits, and nodetool-based health checks — then serializes it to cassandra-cluster.docker-compose.yml with yaml.dump.
 
 # %%
-# !docker compose -f cassandra-cluster.docker-compose.yml up -d --wait
-assert _exit_code == 0, "docker compose up --wait failed: a service did not become healthy"
+run_command(["docker", "compose", "-f", "cassandra-cluster.docker-compose.yml", "up", "-d", "--wait"])
 
 # %% [markdown]
 # This cell collects commented-out diagnostic commands for opening cqlsh sessions on each node and running nodetool status, describecluster, and repair operations against the cluster.

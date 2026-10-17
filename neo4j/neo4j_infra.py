@@ -69,6 +69,12 @@ if LABS_ROOT is None:
         "Could not find the labs-setup root from the current directory"
     )
 MODULE_DIR = LABS_ROOT / "neo4j"
+import sys
+
+if str(LABS_ROOT) not in sys.path:
+    sys.path.insert(0, str(LABS_ROOT))
+from labs_runtime import run_command
+
 os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
@@ -223,7 +229,7 @@ neo4j_compose_yaml_path = os.path.join(LOCALHOST_WORKDIR, "neo4j.docker-compose.
 neo4j_compose_yaml_contents = yaml.dump(
     neo4j_compose_dict, default_flow_style=False, sort_keys=False, indent=4
 )
-with open(neo4j_compose_yaml_path, "w") as f:
+with open(neo4j_compose_yaml_path, "w", encoding="utf-8", newline="\n") as f:
     f.write(neo4j_compose_yaml_contents)
 
 print(f"Successfully created: '{os.path.relpath(neo4j_compose_yaml_path)}'")
@@ -233,5 +239,4 @@ display(Markdown(f"```yaml\n{neo4j_compose_yaml_contents}\n```"))
 # Starts the generated neo4j.docker-compose.yml stack in detached mode and waits until the cypher-shell healthcheck reports the neo4j-instance container as healthy.
 
 # %%
-# !docker compose -f neo4j.docker-compose.yml up -d --wait
-assert _exit_code == 0, "docker compose up --wait failed: a service did not become healthy"
+run_command(["docker", "compose", "-f", "neo4j.docker-compose.yml", "up", "-d", "--wait"])

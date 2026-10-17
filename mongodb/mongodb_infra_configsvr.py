@@ -72,6 +72,12 @@ if LABS_ROOT is None:
         "Could not find the labs-setup root from the current directory"
     )
 MODULE_DIR = LABS_ROOT / "mongodb"
+import sys
+
+if str(LABS_ROOT) not in sys.path:
+    sys.path.insert(0, str(LABS_ROOT))
+from labs_runtime import run_command
+
 os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
@@ -136,6 +142,7 @@ network_exists = subprocess.run(
     ["docker", "network", "inspect", "mongodb-network"],
     capture_output=True,
     text=True,
+    encoding="utf-8",
 ).returncode == 0
 if not network_exists:
     subprocess.run(
@@ -213,7 +220,7 @@ from IPython.display import Markdown, display
 
 # --- Generate keyfile if it doesn't exist ---
 if not os.path.exists(MONGODB_LOCAL_CLUSTER_KEY_PATH):
-    with open(MONGODB_LOCAL_CLUSTER_KEY_PATH, "w") as f:
+    with open(MONGODB_LOCAL_CLUSTER_KEY_PATH, "w", encoding="utf-8", newline="\n") as f:
         raw_data = secrets.token_bytes(756)
         f.write(base64.b64encode(raw_data).decode("utf-8"))
 
@@ -399,7 +406,7 @@ for i, node_name in enumerate(MONGODB_CONFIG_SVR_NAMES):
 compose_yaml_path = os.path.join(
     LOCALHOST_WORKDIR, "mongodb-configsvr.docker-compose.yml"
 )
-with open(compose_yaml_path, "w") as f:
+with open(compose_yaml_path, "w", encoding="utf-8", newline="\n") as f:
     yaml.dump(
         configsvr_compose_dict, f, default_flow_style=False, sort_keys=False, indent=4
     )
@@ -415,8 +422,7 @@ display(
 # Starts the three config servers in detached mode and waits until every healthcheck reports healthy.
 
 # %%
-# !docker compose -f mongodb-configsvr.docker-compose.yml up -d --wait
-assert _exit_code == 0, "docker compose up --wait failed: a service did not become healthy"
+run_command(["docker", "compose", "-f", "mongodb-configsvr.docker-compose.yml", "up", "-d", "--wait"])
 
 # %% [markdown]
 # # Initialise the `config_rs` Replica Set

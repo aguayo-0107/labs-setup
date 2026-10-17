@@ -46,7 +46,7 @@ if re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", VPN_CLIENT_ALIAS) is None:
 VPN_CLIENT_DOMAIN = f"{VPN_CLIENT_ALIAS}.{VPN_DOMAIN}"
 
 # %% [markdown]
-# Locates the labs-setup root by walking parent directories for a pyproject.toml alongside the cassandra and mongodb module folders, then changes into the redis module directory.
+# Locates the labs-setup root by walking parent directories for a pyproject.toml alongside the cassandra and mongodb module folders, makes its `labs_runtime` helpers importable, then changes into the redis module directory.
 
 # %%
 # Resolve module assets from the labs-setup root.
@@ -69,6 +69,12 @@ if LABS_ROOT is None:
         "Could not find the labs-setup root from the current directory"
     )
 MODULE_DIR = LABS_ROOT / "redis"
+import sys
+
+if str(LABS_ROOT) not in sys.path:
+    sys.path.insert(0, str(LABS_ROOT))
+from labs_runtime import run_command
+
 os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
@@ -267,7 +273,7 @@ redis_compose_yaml_contents = yaml.dump(
     redis_compose_dict, default_flow_style=False, sort_keys=False, indent=4
 )
 
-with open(redis_compose_yaml_path, "w") as f:
+with open(redis_compose_yaml_path, "w", encoding="utf-8", newline="\n") as f:
     f.write(redis_compose_yaml_contents)
 
 print(f"Successfully created: '{os.path.relpath(redis_compose_yaml_path)}'")
@@ -277,8 +283,7 @@ display(Markdown(f"```yaml\n{redis_compose_yaml_contents}\n```"))
 # Brings the six-node Redis cluster up in detached mode with `docker compose up -d --wait`, blocking until every node's redis-cli ping healthcheck passes.
 
 # %%
-# !docker compose -f redis-cluster.docker-compose.yml up -d --wait
-assert _exit_code == 0, "docker compose up --wait failed: a service did not become healthy"
+run_command(["docker", "compose", "-f", "redis-cluster.docker-compose.yml", "up", "-d", "--wait"])
 
 # %% [markdown]
 # Bootstraps the cluster with `redis-cli --cluster create` across the six node endpoints (three primaries, three replicas), then polls CLUSTER INFO until cluster_state is ok and all six nodes are known.
@@ -299,6 +304,7 @@ cluster_bootstrap = subprocess.run(
     capture_output=True,
     text=True,
     timeout=120,
+    encoding="utf-8",
 )
 print(cluster_bootstrap.stdout)
 assert cluster_bootstrap.returncode == 0, cluster_bootstrap.stderr
@@ -316,6 +322,7 @@ for _ in range(30):
         capture_output=True,
         text=True,
         check=True,
+        encoding="utf-8",
     ).stdout
     if "cluster_state:ok" in cluster_info:
         break
@@ -341,6 +348,7 @@ for _ in range(60):
             capture_output=True,
             text=True,
             check=True,
+            encoding="utf-8",
         ).stdout
     )
     if len(cluster_slots) == 3 and all(len(r) == 4 for r in cluster_slots):

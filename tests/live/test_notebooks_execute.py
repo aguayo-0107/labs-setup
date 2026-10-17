@@ -2,9 +2,9 @@
 
 Infrastructure always runs before its lab; MongoDB config servers before the
 data nodes; Hadoop before Hive and Spark. Executed copies go to a temporary
-directory, never next to the committed notebooks. Spark's host-side driver
-needs Java 17 (set JAVA_HOME) and inbound connections from the Docker bridges
-to ports 4050-4051 of the host.
+directory, never next to the committed notebooks. The Spark lab is the Spark
+Driver, so it runs inside the spark-jupyter container, which sees labs-setup
+read-only; its executed copy stays inside the container.
 """
 
 from __future__ import annotations
@@ -33,14 +33,24 @@ SEQUENCE = (
 )
 
 
+IN_CONTAINER = {"spark/spark_lab": ("spark-jupyter", "/opt/spark/work-dir/labs-setup")}
+
+
 def papermill(labs_root, tmp_path, stem, *extra):
-    output = tmp_path / f"{stem.replace('/', '_')}.executed.ipynb"
+    if stem in IN_CONTAINER:
+        container, root = IN_CONTAINER[stem]
+        command = [
+            "docker", "exec", "-w", root, container, "papermill", f"{stem}.ipynb",
+            f"/tmp/{stem.replace('/', '_')}.executed.ipynb", "-k", "python3",
+        ]
+    else:
+        command = [
+            sys.executable, "-m", "papermill", f"{stem}.ipynb",
+            str(tmp_path / f"{stem.replace('/', '_')}.executed.ipynb"), "-k", "non-relational-dbs-labs",
+        ]
     result = subprocess.run(
-        [
-            sys.executable, "-m", "papermill", f"{stem}.ipynb", str(output),
-            "-k", "non-relational-dbs-labs", "-p", "NETWORK_MODE", "local", *extra,
-        ],
-        cwd=labs_root, capture_output=True, text=True, check=False,
+        [*command, "-p", "NETWORK_MODE", "local", *extra],
+        cwd=labs_root, capture_output=True, text=True, encoding="utf-8", check=False,
     )
     assert result.returncode == 0, result.stderr[-4000:]
 

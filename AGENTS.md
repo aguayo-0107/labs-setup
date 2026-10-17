@@ -36,13 +36,19 @@ These rules apply to maintainers and automation working inside this independent 
   - `delta-spark_2.12-3.2.0.jar`
   - `delta-storage-3.2.0.jar`
   - `antlr4-runtime-4.9.3.jar`
-- Executors run in Docker with the shipped Python environment and bundled JAR classpath. The host-side driver advertises `host.docker.internal` for executor callbacks.
+- The Driver is the notebook kernel inside `spark-jupyter`; it uses Docker-network names (`spark-master-internal`, `namenode`, `spark-jupyter`) so executors never connect to the host. Executors run with the shipped Python environment and bundled JAR classpath.
 
 ## AWS Contract
 
 - The AWS lab must never use a real AWS account or create billable resources. It runs only against the local emulator started by `aws/aws_infra`: Moto for S3, DynamoDB, IAM, STS and Lambda, and the Athena gateway (`athena_gateway/`) with its HiveServer2 engine.
-- Client access goes through the generated `aws/mount/client` files with dummy credentials and `AWS_ENDPOINT_URL` / `AWS_ENDPOINT_URL_ATHENA`; checks must confirm Moto's account `123456789012`.
-- Keep images pinned (`motoserver/moto:5.2.4`, `apache/hive:4.0.1`, the Lambda runtime by digest). The gateway image installs `aws/athena-gateway.requirements.txt` with `--no-deps`; those pins must equal `uv.lock` (enforced by a unit test).
+- Students work in the `aws-terminal` container (dummy credentials, `AWS_ENDPOINT_URL` / `AWS_ENDPOINT_URL_ATHENA`, no access to the host's `~/.aws`); host-side clients use the generated `aws/mount/client` files. Checks must confirm Moto's account `123456789012`.
+- Keep images pinned (`motoserver/moto:5.2.4`, `apache/hive:4.0.1`, the Lambda runtime by digest, the AWS CLI installer by SHA-256 per architecture). The gateway and terminal images install `aws/*.requirements.txt` with `--no-deps`; those pins must equal `uv.lock` (enforced by a unit test).
+
+## Operating System Contract
+
+- Notebooks and labs must behave the same on Windows, macOS and Linux. Notebooks never use IPython `!` lines or `shell=True`: they call `labs_runtime.run_command([...])`. Text I/O states `encoding=` and, on writes, `newline=` (enforced by `labs_audit`); `.gitattributes` keeps text files LF.
+- Anything that needs a shell runs inside a Linux container. Commands a student types on their own computer are single-line `docker`, `uv` or `python` commands without shell-specific characters.
+- Images without an `arm64` build declare `platform: linux/amd64` (currently `apache/hadoop:3.4.3`).
 
 ## Safety
 

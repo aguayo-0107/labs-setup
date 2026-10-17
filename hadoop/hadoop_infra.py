@@ -71,6 +71,12 @@ if LABS_ROOT is None:
         "Could not find the labs-setup root from the current directory"
     )
 MODULE_DIR = LABS_ROOT / "hadoop"
+import sys
+
+if str(LABS_ROOT) not in sys.path:
+    sys.path.insert(0, str(LABS_ROOT))
+from labs_runtime import run_command
+
 os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
@@ -79,6 +85,11 @@ print(f"Working directory: {MODULE_DIR}")
 
 # %%
 HADOOP_START_FROM_SCRATCH = START_FROM_SCRATCH
+HADOOP_IMAGE = "apache/hadoop:3.4.3"
+# apache/hadoop is published for linux/amd64 only; declaring it makes Apple
+# Silicon hosts run it under Docker Desktop's emulation instead of failing to
+# find a matching image.
+HADOOP_PLATFORM = "linux/amd64"
 DOCKER_INTERNAL_HOST = "host.docker.internal"
 DOCKER_DNS = [VPN_DNS_IP] if NETWORK_MODE == "vpn" else []
 HOST_BIND_IP = VPN_HOST_IP if NETWORK_MODE == "vpn" else "127.0.0.1"
@@ -407,7 +418,8 @@ hadoop_compose_dict = {
     },
     "services": {
         "namenode": {
-            "image": "apache/hadoop:3.4.3",
+            "image": HADOOP_IMAGE,
+            "platform": HADOOP_PLATFORM,
             "container_name": "namenode",
             "command": [
                 "bash",
@@ -466,7 +478,8 @@ hadoop_compose_dict = {
             },
         },
         "resourcemanager": {
-            "image": "apache/hadoop:3.4.3",
+            "image": HADOOP_IMAGE,
+            "platform": HADOOP_PLATFORM,
             "container_name": "resourcemanager",
             "command": [
                 "bash",
@@ -540,7 +553,8 @@ for i in range(0, HADOOP_NUM_WORKERS):
 
     # Programmatically add DataNodes
     hadoop_compose_dict["services"][HADOOP_DATANODE_NAMES[i]] = {
-        "image": "apache/hadoop:3.4.3",
+        "image": HADOOP_IMAGE,
+        "platform": HADOOP_PLATFORM,
         "container_name": HADOOP_DATANODE_NAMES[i],
         "command": [
             "bash",
@@ -603,7 +617,8 @@ for i in range(0, HADOOP_NUM_WORKERS):
 
     # Programmatically add NodeManagers
     hadoop_compose_dict["services"][HADOOP_NODEMANAGER_NAMES[i]] = {
-        "image": "apache/hadoop:3.4.3",
+        "image": HADOOP_IMAGE,
+        "platform": HADOOP_PLATFORM,
         "container_name": HADOOP_NODEMANAGER_NAMES[i],
         "command": [
             "bash",
@@ -688,7 +703,8 @@ hadoop_compose_yaml_contents = yaml.dump(
     hadoop_compose_dict, default_flow_style=False, sort_keys=False, indent=4
 )
 with open(
-    os.path.join(LOCALHOST_WORKDIR, hadoop_compose_file_name), "w"
+    os.path.join(LOCALHOST_WORKDIR, hadoop_compose_file_name), "w",
+    encoding="utf-8", newline="\n",
 ) as hadoop_compose_file:
     hadoop_compose_file.write(hadoop_compose_yaml_contents)
 print(
@@ -701,8 +717,7 @@ display(Markdown(f"```yaml\n{hadoop_compose_yaml_contents}\n```"))
 #
 
 # %%
-# !docker compose -f hadoop-cluster.docker-compose.yml up -d --wait
-assert _exit_code == 0, "docker compose up --wait failed: a service did not become healthy"
+run_command(["docker", "compose", "-f", "hadoop-cluster.docker-compose.yml", "up", "-d", "--wait"])
 
 # %% [markdown]
 # Waits until every NodeManager has registered with the ResourceManager. The NodeManagers have no Compose healthcheck, so `--wait` can return while YARN still reports fewer active nodes than `HADOOP_NUM_WORKERS`; a lab started in that window fails its cluster check.

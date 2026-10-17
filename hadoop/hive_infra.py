@@ -70,11 +70,17 @@ if LABS_ROOT is None:
         "Could not find the labs-setup root from the current directory"
     )
 MODULE_DIR = LABS_ROOT / "hadoop"
+import sys
+
+if str(LABS_ROOT) not in sys.path:
+    sys.path.insert(0, str(LABS_ROOT))
+from labs_runtime import run_command
+
 os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
 # %% [markdown]
-# Declares the Hive service topology and connection constants: PostgreSQL metastore database credentials, container names and hosts for hive-metastore-db / hive-schema-init / hive-metastore / hive-server2, internal and external ports, warehouse paths, dependent Hadoop endpoints, and image versions.
+# Declares the Hive service topology and connection constants: PostgreSQL metastore database credentials, container names and hosts for hive-metastore-db / hive-schema-init / hive-metastore / hive-server2 / hive-terminal, internal and external ports, warehouse paths, dependent Hadoop endpoints, and image versions.
 
 # %%
 HIVE_START_FROM_SCRATCH = START_FROM_SCRATCH
@@ -90,6 +96,10 @@ HIVE_DB_CONTAINER_NAME = "hive-metastore-db"
 HIVE_SCHEMA_INIT_CONTAINER_NAME = "hive-schema-init"
 HIVE_METASTORE_CONTAINER_NAME = "hive-metastore"
 HIVE_SERVER2_CONTAINER_NAME = "hive-server2"
+# The student's terminal for files and HDFS: the Hive and Hadoop clients with
+# HiveServer2's configuration, in its own memory budget so a client JVM never
+# competes with HiveServer2 (which already uses most of its 768M).
+HIVE_TERMINAL_CONTAINER_NAME = "hive-terminal"
 
 HIVE_DB_HOSTNAME = HIVE_DB_CONTAINER_NAME
 HIVE_SCHEMA_INIT_HOSTNAME = HIVE_SCHEMA_INIT_CONTAINER_NAME
@@ -241,6 +251,7 @@ core_site_xml_content = f"""<?xml version="1.0"?>
 HADOOP_REPLICATION = subprocess.run(
     ["docker", "exec", HADOOP_NAMENODE_HOSTNAME, "hdfs", "getconf", "-confKey", "dfs.replication"],
     capture_output=True, text=True, check=True,
+    encoding="utf-8",
 ).stdout.strip().splitlines()[-1]
 assert HADOOP_REPLICATION.isdigit(), HADOOP_REPLICATION
 
@@ -256,9 +267,9 @@ hdfs_site_xml_content = f"""<?xml version="1.0"?>
 for container in [HIVE_METASTORE_CONTAINER_NAME, HIVE_SERVER2_CONTAINER_NAME]:
     dest_dir = os.path.join(DOCKER_MOUNTDIR, container, "hive_custom_conf")
     os.makedirs(dest_dir, exist_ok=True)
-    with open(os.path.join(dest_dir, "core-site.xml"), "w") as f:
+    with open(os.path.join(dest_dir, "core-site.xml"), "w", encoding="utf-8", newline="\n") as f:
         f.write(core_site_xml_content)
-    with open(os.path.join(dest_dir, "hdfs-site.xml"), "w") as f:
+    with open(os.path.join(dest_dir, "hdfs-site.xml"), "w", encoding="utf-8", newline="\n") as f:
         f.write(hdfs_site_xml_content)
 
 # %% [markdown]
@@ -403,7 +414,7 @@ hive_site_xml_content = f"""<?xml version="1.0"?>
 for container in [HIVE_METASTORE_CONTAINER_NAME, HIVE_SERVER2_CONTAINER_NAME]:
     dest_dir = os.path.join(DOCKER_MOUNTDIR, container, "hive_custom_conf")
     os.makedirs(dest_dir, exist_ok=True)
-    with open(os.path.join(dest_dir, "hive-site.xml"), "w") as f:
+    with open(os.path.join(dest_dir, "hive-site.xml"), "w", encoding="utf-8", newline="\n") as f:
         f.write(hive_site_xml_content)
 
 # %% [markdown]
@@ -477,7 +488,7 @@ tez_site_content = f"""<?xml version="1.0"?>
 for container in [HIVE_METASTORE_CONTAINER_NAME, HIVE_SERVER2_CONTAINER_NAME]:
     dest_dir = os.path.join(DOCKER_MOUNTDIR, container, "hive_custom_conf")
     os.makedirs(dest_dir, exist_ok=True)
-    with open(os.path.join(dest_dir, "tez-site.xml"), "w") as f:
+    with open(os.path.join(dest_dir, "tez-site.xml"), "w", encoding="utf-8", newline="\n") as f:
         f.write(tez_site_content)
 
 # %% [markdown]
@@ -508,7 +519,7 @@ log4j.logger.org.apache.iceberg=INFO
 for container in [HIVE_METASTORE_CONTAINER_NAME, HIVE_SERVER2_CONTAINER_NAME]:
     dest_dir = os.path.join(DOCKER_MOUNTDIR, container, "hive_custom_conf")
     os.makedirs(dest_dir, exist_ok=True)
-    with open(os.path.join(dest_dir, "log4j.properties"), "w") as f:
+    with open(os.path.join(dest_dir, "log4j.properties"), "w", encoding="utf-8", newline="\n") as f:
         f.write(log4j_properties_content)
 
 # %% [markdown]
@@ -690,13 +701,42 @@ hive_compose_dict = {
                 "start_period": "15s",
             },
         },
+        HIVE_TERMINAL_CONTAINER_NAME: {
+            "image": APACHE_HIVE_IMAGE,
+            "container_name": HIVE_TERMINAL_CONTAINER_NAME,
+            "user": "hive",
+            # No Hive service: an idle shell host for `docker exec -it hive-terminal bash`.
+            # /tmp/hive is created by the hive user (a Compose working_dir would
+            # be created by root first and stay read-only for hive).
+            "entrypoint": ["bash", "-c", "mkdir -p /tmp/hive && exec sleep infinity"],
+            "depends_on": {
+                HIVE_SERVER2_CONTAINER_NAME: {"condition": "service_healthy"}
+            },
+            "environment": {
+                "HADOOP_CONF_DIR": "/hive_custom_conf",
+                "HIVE_CONF_DIR": "/hive_custom_conf",
+            },
+            "volumes": [
+                f"./mount/{HIVE_SERVER2_CONTAINER_NAME}/hive_custom_conf:/hive_custom_conf:ro",
+                f"./mount/{HIVE_SERVER2_CONTAINER_NAME}/hive_custom_conf/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro",
+            ],
+            "networks": ["hadoop-cluster"],
+            "dns": DOCKER_DNS,
+            "deploy": {"resources": {"limits": {"cpus": "1.0", "memory": "768M"}}},
+            "healthcheck": {
+                "test": ["CMD-SHELL", "test -d /tmp/hive"],
+                "interval": "5s",
+                "timeout": "5s",
+                "retries": 12,
+            },
+        },
     },
 }
 
 yaml_contents = yaml.dump(
     hive_compose_dict, default_flow_style=False, sort_keys=False, indent=4
 )
-with open(compose_filename, "w") as f:
+with open(compose_filename, "w", encoding="utf-8", newline="\n") as f:
     f.write(yaml_contents)
 
 # %% [markdown]
@@ -723,32 +763,31 @@ if HIVE_START_FROM_SCRATCH:
             check=False,
         )
 
-# !docker exec -u root namenode groupadd hive
-# !docker exec -u root namenode useradd -m -g hive hive
-# !docker exec -u root namenode usermod -aG sudo hive
-# !docker exec -u root namenode usermod -aG hadoop hive
-# !docker exec -u root namenode bash -c "grep -qFx 'hive ALL=(ALL) NOPASSWD:ALL' /etc/sudoers || echo 'hive ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers"
+run_command(["docker", "exec", "-u", "root", "namenode", "groupadd", "hive"], check=False)
+run_command(["docker", "exec", "-u", "root", "namenode", "useradd", "-m", "-g", "hive", "hive"], check=False)
+run_command(["docker", "exec", "-u", "root", "namenode", "usermod", "-aG", "sudo", "hive"], check=False)
+run_command(["docker", "exec", "-u", "root", "namenode", "usermod", "-aG", "hadoop", "hive"], check=False)
+run_command(["docker", "exec", "-u", "root", "namenode", "bash", "-c", "grep -qFx 'hive ALL=(ALL) NOPASSWD:ALL' /etc/sudoers || echo 'hive ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers"], check=False)
 # # !docker exec -u root namenode bash -c "echo 'hive ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers"
-# !docker exec -u hadoop namenode hdfs dfs -mkdir -p /tmp/hive
-# !docker exec -u hadoop namenode hdfs dfs -chown -R hive:hive /tmp/hive
-# !docker exec -u hadoop namenode hdfs dfs -chmod -R 777 /tmp
-# !docker exec -u hadoop namenode hdfs dfs -mkdir -p {HIVE_DATADIR}/managed
-# !docker exec -u hadoop namenode hdfs dfs -mkdir -p {HIVE_DATADIR}/external
-# !docker exec -u hadoop namenode hdfs dfs -chown -R hive:hive {HIVE_USERDIR}
-# !docker exec -u hadoop namenode hdfs dfs -chmod -R 777 {HIVE_USERDIR}
+run_command(["docker", "exec", "-u", "hadoop", "namenode", "hdfs", "dfs", "-mkdir", "-p", "/tmp/hive"], check=False)
+run_command(["docker", "exec", "-u", "hadoop", "namenode", "hdfs", "dfs", "-chown", "-R", "hive:hive", "/tmp/hive"], check=False)
+run_command(["docker", "exec", "-u", "hadoop", "namenode", "hdfs", "dfs", "-chmod", "-R", "777", "/tmp"], check=False)
+run_command(["docker", "exec", "-u", "hadoop", "namenode", "hdfs", "dfs", "-mkdir", "-p", f"{HIVE_DATADIR}/managed"], check=False)
+run_command(["docker", "exec", "-u", "hadoop", "namenode", "hdfs", "dfs", "-mkdir", "-p", f"{HIVE_DATADIR}/external"], check=False)
+run_command(["docker", "exec", "-u", "hadoop", "namenode", "hdfs", "dfs", "-chown", "-R", "hive:hive", f"{HIVE_USERDIR}"], check=False)
+run_command(["docker", "exec", "-u", "hadoop", "namenode", "hdfs", "dfs", "-chmod", "-R", "777", f"{HIVE_USERDIR}"], check=False)
 
 # %% [markdown]
-# Starts the full hive-cluster.docker-compose.yml stack in detached mode with --wait, so PostgreSQL, the metastore schema init job, hive-metastore, and hive-server2 must all pass their healthchecks before execution continues.
+# Starts the full hive-cluster.docker-compose.yml stack in detached mode with --wait, so PostgreSQL, the metastore schema init job, hive-metastore, hive-server2 and the student terminal hive-terminal must all pass their healthchecks before execution continues.
 
 # %% vscode={"languageId": "markdown"}
-# !docker compose -f hive-cluster.docker-compose.yml up -d --wait
-assert _exit_code == 0, "docker compose up --wait failed: a service did not become healthy"
+run_command(["docker", "compose", "-f", "hive-cluster.docker-compose.yml", "up", "-d", "--wait"])
 
 # %% [markdown]
 # # Add .beeline dir to hive $HOME
 
 # %%
-# !docker exec -u root hive-server2 bash -c "mkdir -p /home/hive/.beeline && chown -R hive:hive /home/hive"
+run_command(["docker", "exec", "-u", "root", "hive-server2", "bash", "-c", "mkdir -p /home/hive/.beeline && chown -R hive:hive /home/hive"], check=False)
 
 # %% [markdown]
 # # Load dist-lib (tez, common-collections) to HDFS
@@ -794,26 +833,26 @@ tar -czf /tmp/dist-lib.tar.gz *
 echo "Paquete construido con éxito."
 """
 
-with open("build_dist_lib_tar.sh", "w", newline='\n') as f:
+with open("build_dist_lib_tar.sh", "w", newline='\n', encoding="utf-8") as f:
     f.write(build_tar_script)
 
 # Ejecutamos la construcción dentro de hive-server2
 print("Construyendo el tarball dentro de hive-server2...")
-# !docker cp build_dist_lib_tar.sh hive-server2:/tmp/build_dist_lib_tar.sh
-# !docker exec -u root hive-server2 bash /tmp/build_dist_lib_tar.sh
+run_command(["docker", "cp", "build_dist_lib_tar.sh", "hive-server2:/tmp/build_dist_lib_tar.sh"], check=False)
+run_command(["docker", "exec", "-u", "root", "hive-server2", "bash", "/tmp/build_dist_lib_tar.sh"], check=False)
 
 # Extraemos SOLO el tarball ya terminado y lo pasamos al namenode
 print("Transfiriendo el tarball terminado al Namenode...")
-# !docker cp hive-server2:/tmp/dist-lib.tar.gz ./dist-lib.tar.gz
-# !docker cp ./dist-lib.tar.gz namenode:/tmp/dist-lib.tar.gz
+run_command(["docker", "cp", "hive-server2:/tmp/dist-lib.tar.gz", "./dist-lib.tar.gz"], check=False)
+run_command(["docker", "cp", "./dist-lib.tar.gz", "namenode:/tmp/dist-lib.tar.gz"], check=False)
 
 # Subimos a HDFS desde el namenode a la nueva ruta
 print("Subiendo a HDFS en /apps/dist-lib ...")
 
-# !docker exec namenode hdfs dfs -mkdir -p /apps/dist-lib
-# !docker exec namenode hdfs dfs -rm -r -f /apps/dist-lib/*
-# !docker exec namenode hdfs dfs -put /tmp/dist-lib.tar.gz /apps/dist-lib/dist-lib.tar.gz
-# !docker exec namenode hdfs dfs -chmod -R 777 /apps/dist-lib
+run_command(["docker", "exec", "namenode", "hdfs", "dfs", "-mkdir", "-p", "/apps/dist-lib"], check=False)
+run_command(["docker", "exec", "namenode", "hdfs", "dfs", "-rm", "-r", "-f", "/apps/dist-lib/*"], check=False)
+run_command(["docker", "exec", "namenode", "hdfs", "dfs", "-put", "/tmp/dist-lib.tar.gz", "/apps/dist-lib/dist-lib.tar.gz"], check=False)
+run_command(["docker", "exec", "namenode", "hdfs", "dfs", "-chmod", "-R", "777", "/apps/dist-lib"], check=False)
 
 print("✅ ¡ÉXITO! Distributed Cache unificado y subido a HDFS en /apps/dist-lib.")
 

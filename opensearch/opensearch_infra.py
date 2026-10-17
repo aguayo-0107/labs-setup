@@ -69,6 +69,12 @@ if LABS_ROOT is None:
         "Could not find the labs-setup root from the current directory"
     )
 MODULE_DIR = LABS_ROOT / "opensearch"
+import sys
+
+if str(LABS_ROOT) not in sys.path:
+    sys.path.insert(0, str(LABS_ROOT))
+from labs_runtime import run_command
+
 os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
@@ -213,7 +219,8 @@ for i in range(OPENSEARCH_TOTAL_NODES):
         check=True,
     )
     with open(
-        os.path.join(node_mount_dir, "performance-analyzer.properties"), "w"
+        os.path.join(node_mount_dir, "performance-analyzer.properties"), "w",
+        encoding="utf-8", newline="\n",
     ) as f:
         f.write(
             f"""# Performance Analyzer Configuration for {OPENSEARCH_NODE_NAMES[i]}
@@ -304,7 +311,7 @@ opensearch_compose_yaml_contents = yaml.dump(
     opensearch_compose_dict, default_flow_style=False, sort_keys=False, indent=4
 )
 
-with open(opensearch_compose_yaml_path, "w") as f:
+with open(opensearch_compose_yaml_path, "w", encoding="utf-8", newline="\n") as f:
     f.write(opensearch_compose_yaml_contents)
 
 print(f"Successfully created: '{os.path.relpath(opensearch_compose_yaml_path)}'")
@@ -314,5 +321,4 @@ display(Markdown(f"```yaml\n{opensearch_compose_yaml_contents}\n```"))
 # Starts the generated opensearch-cluster.docker-compose.yml stack in detached mode and waits until every node's _cluster/health healthcheck and Dashboards become healthy.
 
 # %%
-# !docker compose -f opensearch-cluster.docker-compose.yml up -d --wait
-assert _exit_code == 0, "docker compose up --wait failed: a service did not become healthy"
+run_command(["docker", "compose", "-f", "opensearch-cluster.docker-compose.yml", "up", "-d", "--wait"])
