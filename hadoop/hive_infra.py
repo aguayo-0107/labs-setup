@@ -101,6 +101,20 @@ HIVE_SERVER2_CONTAINER_NAME = "hive-server2"
 # competes with HiveServer2 (which already uses most of its 768M).
 HIVE_TERMINAL_CONTAINER_NAME = "hive-terminal"
 
+# Java heap of the two Hive services. The image's entrypoint passes -Xmx1G, larger than the
+# containers' memory limits (768M HiveServer2, 512M metastore), so the JVM may grow its heap
+# past what the container can hold. A second -Xmx in SERVICE_OPTS comes after the image's on
+# the command line and the last one wins. Measured over the Hive lab and the Hive deck
+# walkthroughs with GC logs (2026-10-18): the largest live heap after a collection was 162 MiB
+# (HiveServer2) and 34 MiB (metastore). Most of HiveServer2's memory is outside the heap
+# (Native Memory Tracking with a 320 MiB heap: classes 202 MiB, code 80 MiB, thread stacks
+# 75 MiB, symbols 40 MiB); with -Xmx256m its resident size peaked at 735 MiB.
+HIVE_SERVER2_HEAP = "-Xmx256m"
+HIVE_METASTORE_HEAP = "-Xmx256m"
+# glibc gives each thread that allocates its own malloc arena (up to 8 per CPU); limiting them
+# to 2 keeps HiveServer2's ~110 threads from holding hundreds of MiB of half-used arenas.
+HIVE_MALLOC_ARENA_MAX = "2"
+
 HIVE_DB_HOSTNAME = HIVE_DB_CONTAINER_NAME
 HIVE_SCHEMA_INIT_HOSTNAME = HIVE_SCHEMA_INIT_CONTAINER_NAME
 HIVE_METASTORE_HOSTNAME = HIVE_METASTORE_CONTAINER_NAME
@@ -629,10 +643,11 @@ hive_compose_dict = {
                 "DB_DRIVER": "postgres",
                 "IS_RESUME": "true",
                 "SERVICE_NAME": "metastore",
+                "MALLOC_ARENA_MAX": HIVE_MALLOC_ARENA_MAX,
                 "HIVE_CUSTOM_CONF_DIR": "/hive_custom_conf",
                 "TEZ_CONF_DIR": "/hive_custom_conf",
                 "HADOOP_CONF_DIR": "/hive_custom_conf",
-                "SERVICE_OPTS": f"{metastore_jdbc_opts} {hdfs_opts}",
+                "SERVICE_OPTS": f"{metastore_jdbc_opts} {hdfs_opts} {HIVE_METASTORE_HEAP}",
                 # "HADOOP_CLASSPATH": "/hive_custom_conf:/opt/hive/lib/postgresql-42.7.10.jar:/opt/hive/lib/*:/opt/tez/*:/opt/tez/lib/*",
                 "HADOOP_CLASSPATH": "/hive_custom_conf:/opt/hive/lib/postgresql-42.7.10.jar:/opt/tez/*:/opt/tez/lib/*",
             },
@@ -663,6 +678,11 @@ hive_compose_dict = {
             "image": APACHE_HIVE_IMAGE,
             "container_name": HIVE_SERVER2_CONTAINER_NAME,
             "hostname": HIVE_SERVER2_COMPOSE_HOST,
+            # HiveServer2 leaves /opt/hive/conf/hiveserver2.pid in the container layer. After a hard
+            # stop (OOM kill, docker kill, host crash) the same container restarts with PID 7 taken by
+            # its own shell and refuses to start ("HiveServer2 running as process 7. Stop it first.").
+            # Nothing else runs in the container, so a PID file at start is always stale.
+            "entrypoint": ["sh", "-c", "rm -f /opt/hive/conf/hiveserver2.pid && exec /entrypoint.sh"],
             "depends_on": {
                 HIVE_METASTORE_CONTAINER_NAME: {"condition": "service_healthy"}
             },
@@ -670,10 +690,11 @@ hive_compose_dict = {
                 "DB_DRIVER": "postgres",
                 "IS_RESUME": "true",
                 "SERVICE_NAME": "hiveserver2",
+                "MALLOC_ARENA_MAX": HIVE_MALLOC_ARENA_MAX,
                 "HIVE_CUSTOM_CONF_DIR": "/hive_custom_conf",
                 "TEZ_CONF_DIR": "/hive_custom_conf",
                 "HADOOP_CONF_DIR": "/hive_custom_conf",
-                "SERVICE_OPTS": f"-Dhive.metastore.uris=thrift://{HIVE_METASTORE_HOSTNAME}:{HIVE_METASTORE_EXTERNAL_PORT} {hdfs_opts}",
+                "SERVICE_OPTS": f"-Dhive.metastore.uris=thrift://{HIVE_METASTORE_HOSTNAME}:{HIVE_METASTORE_EXTERNAL_PORT} {hdfs_opts} {HIVE_SERVER2_HEAP}",
                 # "HADOOP_CLASSPATH": "/hive_custom_conf:/opt/hive/lib/postgresql-42.7.10.jar:/opt/hive/lib/*:/opt/tez/*:/opt/tez/lib/*",
                 "HADOOP_CLASSPATH": "/hive_custom_conf:/opt/hive/lib/postgresql-42.7.10.jar:/opt/tez/*:/opt/tez/lib/*",
             },
