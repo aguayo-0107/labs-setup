@@ -80,7 +80,7 @@ os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
 # %% [markdown]
-# Declares the Hive service topology and connection constants: PostgreSQL metastore database credentials, container names and hosts for hive-metastore-db / hive-schema-init / hive-metastore / hive-server2 / hive-terminal, internal and external ports, warehouse paths, dependent Hadoop endpoints, and image versions.
+# Declares the Hive service topology and connection constants: PostgreSQL metastore database credentials, container names and hosts for hive-metastore-db / hive-metastore / hive-server2 / hive-terminal, internal and external ports, warehouse paths, dependent Hadoop endpoints, and image versions.
 
 # %%
 HIVE_START_FROM_SCRATCH = START_FROM_SCRATCH
@@ -93,7 +93,6 @@ POSTGRES_PASSWORD = "hive"
 POSTGRES_DB = "metastore"
 
 HIVE_DB_CONTAINER_NAME = "hive-metastore-db"
-HIVE_SCHEMA_INIT_CONTAINER_NAME = "hive-schema-init"
 HIVE_METASTORE_CONTAINER_NAME = "hive-metastore"
 HIVE_SERVER2_CONTAINER_NAME = "hive-server2"
 # The student's terminal for files and HDFS: the Hive and Hadoop clients with
@@ -116,18 +115,12 @@ HIVE_METASTORE_HEAP = "-Xmx256m"
 HIVE_MALLOC_ARENA_MAX = "2"
 
 HIVE_DB_HOSTNAME = HIVE_DB_CONTAINER_NAME
-HIVE_SCHEMA_INIT_HOSTNAME = HIVE_SCHEMA_INIT_CONTAINER_NAME
 HIVE_METASTORE_HOSTNAME = HIVE_METASTORE_CONTAINER_NAME
 HIVE_SERVER2_HOSTNAME = HIVE_SERVER2_CONTAINER_NAME
 HIVE_DB_COMPOSE_HOST = (
     HIVE_DB_HOSTNAME
     if NETWORK_MODE == "local"
     else f"{HIVE_DB_CONTAINER_NAME}.{VPN_CLIENT_DOMAIN}"
-)
-HIVE_SCHEMA_INIT_COMPOSE_HOST = (
-    HIVE_SCHEMA_INIT_HOSTNAME
-    if NETWORK_MODE == "local"
-    else f"{HIVE_SCHEMA_INIT_CONTAINER_NAME}.{VPN_CLIENT_DOMAIN}"
 )
 HIVE_METASTORE_COMPOSE_HOST = (
     HIVE_METASTORE_HOSTNAME
@@ -143,11 +136,6 @@ HIVE_DB_CLIENT_HOST = (
     "127.0.0.1"
     if NETWORK_MODE == "local"
     else f"{HIVE_DB_CONTAINER_NAME}.{VPN_CLIENT_DOMAIN}"
-)
-HIVE_SCHEMA_INIT_CLIENT_HOST = (
-    "127.0.0.1"
-    if NETWORK_MODE == "local"
-    else f"{HIVE_SCHEMA_INIT_CONTAINER_NAME}.{VPN_CLIENT_DOMAIN}"
 )
 HIVE_METASTORE_CLIENT_HOST = (
     "127.0.0.1"
@@ -239,7 +227,6 @@ for container in [
     HIVE_DB_CONTAINER_NAME,
     HIVE_METASTORE_CONTAINER_NAME,
     HIVE_SERVER2_CONTAINER_NAME,
-    HIVE_SCHEMA_INIT_CONTAINER_NAME,
 ]:
     if HIVE_START_FROM_SCRATCH:
         clear_bind_directory(os.path.join(DOCKER_MOUNTDIR, container))
@@ -611,37 +598,18 @@ hive_compose_dict = {
                 "start_period": "15s",
             },
         },
-        HIVE_SCHEMA_INIT_CONTAINER_NAME: {
-            "image": APACHE_HIVE_IMAGE,
-            "container_name": HIVE_SCHEMA_INIT_CONTAINER_NAME,
-            "hostname": HIVE_SCHEMA_INIT_COMPOSE_HOST,
-            "depends_on": {HIVE_DB_CONTAINER_NAME: {"condition": "service_healthy"}},
-            "environment": {
-                "DB_DRIVER": "postgres",
-                "SERVICE_OPTS": f"{metastore_jdbc_opts}",
-                # "HADOOP_CLASSPATH": "/hive_custom_conf:/opt/hive/lib/postgresql-42.7.10.jar:/opt/hive/lib/*:/opt/tez/*:/opt/tez/lib/*",
-                "HADOOP_CLASSPATH": "/hive_custom_conf:/opt/hive/lib/postgresql-42.7.10.jar",
-            },
-            "volumes": [
-                "./postgresql-42.7.10.jar:/opt/hive/lib/postgresql-42.7.10.jar"
-            ],
-            "networks": ["hadoop-cluster"],
-            "extra_hosts": [f"{DOCKER_INTERNAL_HOST}:host-gateway"],
-            "dns": DOCKER_DNS,
-            "deploy": {"resources": {"limits": {"cpus": "2.0", "memory": "512M"}}},
-        },
         HIVE_METASTORE_CONTAINER_NAME: {
             "image": APACHE_HIVE_IMAGE,
             "container_name": HIVE_METASTORE_CONTAINER_NAME,
             "hostname": HIVE_METASTORE_COMPOSE_HOST,
-            "depends_on": {
-                HIVE_SCHEMA_INIT_CONTAINER_NAME: {
-                    "condition": "service_completed_successfully"
-                }
-            },
+            # No IS_RESUME: the image's entrypoint runs `schematool -initOrUpgradeSchema` before
+            # starting the metastore, which creates the schema on an empty database and leaves a
+            # current one unchanged, so no separate one-shot container is needed (Apache Hive
+            # docker README: "To skip schematool initialisation or upgrade for metastore use
+            # IS_RESUME=true"). HiveServer2 keeps IS_RESUME=true and never touches the schema.
+            "depends_on": {HIVE_DB_CONTAINER_NAME: {"condition": "service_healthy"}},
             "environment": {
                 "DB_DRIVER": "postgres",
-                "IS_RESUME": "true",
                 "SERVICE_NAME": "metastore",
                 "MALLOC_ARENA_MAX": HIVE_MALLOC_ARENA_MAX,
                 "HIVE_CUSTOM_CONF_DIR": "/hive_custom_conf",
@@ -799,7 +767,7 @@ run_command(["docker", "exec", "-u", "hadoop", "namenode", "hdfs", "dfs", "-chow
 run_command(["docker", "exec", "-u", "hadoop", "namenode", "hdfs", "dfs", "-chmod", "-R", "777", f"{HIVE_USERDIR}"], check=False)
 
 # %% [markdown]
-# Starts the full hive-cluster.docker-compose.yml stack in detached mode with --wait, so PostgreSQL, the metastore schema init job, hive-metastore, hive-server2 and the student terminal hive-terminal must all pass their healthchecks before execution continues.
+# Starts the full hive-cluster.docker-compose.yml stack in detached mode with --wait, so PostgreSQL, hive-metastore (which first creates or checks its schema), hive-server2 and the student terminal hive-terminal must all pass their healthchecks before execution continues.
 
 # %% vscode={"languageId": "markdown"}
 run_command(["docker", "compose", "-f", "hive-cluster.docker-compose.yml", "up", "-d", "--wait"])

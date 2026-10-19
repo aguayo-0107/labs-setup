@@ -80,7 +80,7 @@ os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
 # %% [markdown]
-# Declares the client-side Hive connection constants: PostgreSQL metastore credentials, container names and client hosts resolved per NETWORK_MODE for hive-metastore-db / hive-schema-init / hive-metastore / hive-server2, internal and external ports, warehouse paths, and image versions.
+# Declares the client-side Hive connection constants: PostgreSQL metastore credentials, container names and client hosts resolved per NETWORK_MODE for hive-metastore-db / hive-metastore / hive-server2, internal and external ports, warehouse paths, and image versions.
 
 # %%
 DOCKER_INTERNAL_HOST = "host.docker.internal"
@@ -90,23 +90,16 @@ POSTGRES_PASSWORD = "hive"
 POSTGRES_DB = "metastore"
 
 HIVE_DB_CONTAINER_NAME = "hive-metastore-db"
-HIVE_SCHEMA_INIT_CONTAINER_NAME = "hive-schema-init"
 HIVE_METASTORE_CONTAINER_NAME = "hive-metastore"
 HIVE_SERVER2_CONTAINER_NAME = "hive-server2"
 
 HIVE_DB_HOSTNAME = HIVE_DB_CONTAINER_NAME
-HIVE_SCHEMA_INIT_HOSTNAME = HIVE_SCHEMA_INIT_CONTAINER_NAME
 HIVE_METASTORE_HOSTNAME = HIVE_METASTORE_CONTAINER_NAME
 HIVE_SERVER2_HOSTNAME = HIVE_SERVER2_CONTAINER_NAME
 HIVE_DB_CLIENT_HOST = (
     "127.0.0.1"
     if NETWORK_MODE == "local"
     else f"{HIVE_DB_CONTAINER_NAME}.{VPN_CLIENT_DOMAIN}"
-)
-HIVE_SCHEMA_INIT_CLIENT_HOST = (
-    "127.0.0.1"
-    if NETWORK_MODE == "local"
-    else f"{HIVE_SCHEMA_INIT_CONTAINER_NAME}.{VPN_CLIENT_DOMAIN}"
 )
 HIVE_METASTORE_CLIENT_HOST = (
     "127.0.0.1"
