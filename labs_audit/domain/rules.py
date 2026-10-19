@@ -2,7 +2,7 @@
 
 The rules encode the contracts in AGENTS.md: one papermill parameters cell
 with the documented defaults, the dedicated kernel, no committed outputs,
-`.ipynb` derived from the canonical `.py`, Spark's four checksum-pinned JARs,
+`.ipynb` derived from the canonical `.py`, Spark's six checksum-pinned JARs,
 and operating-system portability: no Windows-only path separators, no IPython
 shell escapes (a `!` line runs in `cmd.exe` on Windows and `/bin/sh`
 elsewhere, so quoting, globs and pipes differ), and text I/O that produces the
@@ -34,6 +34,8 @@ SPARK_JARS: Mapping[str, str] = {
     "delta-spark_2.12-3.2.0.jar": "51d473537d1bc10c81f48b03d8e2a6b604e1b421a70835ec12e917a4245a31d5",
     "delta-storage-3.2.0.jar": "58aab63eba7736fea9e03eafb0dde6704a34a70f570c1a69ab8e4012c25a95d4",
     "antlr4-runtime-4.9.3.jar": "131a6594969bc4f321d652ea2a33bc0e378ca312685ef87791b2c60b29d01ea5",
+    "graphframes-spark3_2.12-0.12.3.jar": "69d7909628caf42bcbe1c7e6e5a5a0901040d00583738d931af41bd72af1d3dc",
+    "graphframes-graphx-spark3_2.12-0.12.3.jar": "8bbd2bbb4c7a3b137e51b4f32f49a30a2ccf70eeb07b452cffa20090dd481b96",
 }
 
 _SHELL_ESCAPE = re.compile(r"^\s*(!|%%(bash|sh|script|system)\b|%(sx|system)\b)", re.M)

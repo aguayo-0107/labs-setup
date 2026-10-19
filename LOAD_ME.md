@@ -98,5 +98,5 @@ Generated Compose files, state, credentials, keys, certificates, and `*.executed
 - Hadoop completes before Hive and Spark; both dependent stacks complete successfully.
 - All supported infrastructure/lab pairs pass in Local mode and VPN mode.
 - Local clients use `127.0.0.1`; VPN base and wildcard service DNS tests resolve to `VPN_HOST_IP`.
-- Spark validates all four tracked JAR checksums and performs no runtime Maven resolution or download.
+- Spark validates all six tracked JAR checksums (Iceberg, Delta Lake, ANTLR and GraphFrames) and performs no runtime Maven resolution or download; `spark_infra` reports GraphFrames 0.12.3 ready in `spark-jupyter` and every Worker.
 - Cleanup leaves no required generated output in version control.

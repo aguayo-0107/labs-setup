@@ -16,7 +16,7 @@ pytestmark = pytest.mark.e2e
 
 def test_cli_passes_on_the_repository(labs_root, capsys):
     assert main(labs_root) == 0
-    assert capsys.readouterr().out.strip() == "19 notebooks, 4 Spark JARs, 0 findings -> PASS"
+    assert capsys.readouterr().out.strip() == "19 notebooks, 6 Spark JARs, 0 findings -> PASS"
 
 
 def test_cli_module_runs_as_a_process(labs_root):

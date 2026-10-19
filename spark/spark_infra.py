@@ -160,6 +160,35 @@ path = Path(LOCALHOST_WORKDIR)
 path.mkdir(parents=True, exist_ok=True)
 
 # %% [markdown]
+# Verifies the pinned SHA-256 of every tracked JAR in `jars/` before any image or container uses them: Iceberg, Delta Lake and ANTLR (listed by the lab session) and GraphFrames (mounted on Spark's default classpath). Spark never downloads them.
+
+# %%
+import hashlib
+
+SPARK_COURSE_JARS = {
+    "iceberg-spark-runtime-3.5_2.12-1.6.1.jar": "87e7184f31ef0caac415bbdfcf1bc4943346a58b98d747dc83434f7139e12acb",
+    "delta-spark_2.12-3.2.0.jar": "51d473537d1bc10c81f48b03d8e2a6b604e1b421a70835ec12e917a4245a31d5",
+    "delta-storage-3.2.0.jar": "58aab63eba7736fea9e03eafb0dde6704a34a70f570c1a69ab8e4012c25a95d4",
+    "antlr4-runtime-4.9.3.jar": "131a6594969bc4f321d652ea2a33bc0e378ca312685ef87791b2c60b29d01ea5",
+}
+# GraphFrames 0.12.3 for Spark 3.5 / Scala 2.12 (Maven Central, io.graphframes). Its POM
+# declares datasketches-java 6.2.0, used only by HyperANF (HllSketch). Spark 3.5.7 already
+# ships datasketches-java 3.3.0 in /opt/spark/jars for its own HLL functions; a second copy
+# would shadow it, so GraphFrames uses Spark's (hyper_anf verified on the lab cluster).
+SPARK_GRAPHFRAMES_JARS = {
+    "graphframes-spark3_2.12-0.12.3.jar": "69d7909628caf42bcbe1c7e6e5a5a0901040d00583738d931af41bd72af1d3dc",
+    "graphframes-graphx-spark3_2.12-0.12.3.jar": "8bbd2bbb4c7a3b137e51b4f32f49a30a2ccf70eeb07b452cffa20090dd481b96",
+}
+for jar_name, expected_sha256 in {**SPARK_COURSE_JARS, **SPARK_GRAPHFRAMES_JARS}.items():
+    jar_path = Path(LOCALHOST_WORKDIR) / "jars" / jar_name
+    if not jar_path.is_file():
+        raise FileNotFoundError(f"Missing tracked JAR: {jar_path}")
+    actual_sha256 = hashlib.sha256(jar_path.read_bytes()).hexdigest()
+    if actual_sha256 != expected_sha256:
+        raise ValueError(f"Checksum mismatch for {jar_name}: {actual_sha256} != {expected_sha256}")
+    print(f"OK {jar_name}")
+
+# %% [markdown]
 # # Stop spark-cluster.docker-compose.yml
 
 # %%
@@ -214,6 +243,7 @@ from IPython.display import Markdown, display
 # Driver), and papermill executes spark_lab.ipynb here for acceptance runs.
 dockerfile_spark_jupyter_python_packages = (
     "pyspark==3.5.7 delta-spark==3.2.0 jupyterlab==4.6.4 pandas==2.3.3 pyarrow==25.0.1 faker==40.36.0 papermill==2.7.0"
+    " graphframes-py==0.12.3"
 )
 
 dockerfile_spark_jupyter_name = "dockerfile.spark-jupyter"
@@ -309,6 +339,12 @@ SPARK_VSCODE_SERVER_DIR = os.path.join(LOCALHOST_WORKDIR, "vscode_server")
 SPARK_MOUNT_JARS = [
     f"{os.path.join(LOCALHOST_WORKDIR, 'jars')}:/opt/spark/course-jars:ro"
 ]
+# GraphFrames joins Spark's default classpath (/opt/spark/jars) in the Driver and
+# the Executors, so every session can use it without listing it or downloading it.
+SPARK_MOUNT_GRAPHFRAMES_JARS = [
+    f"{os.path.join(LOCALHOST_WORKDIR, 'jars', jar_name)}:/opt/spark/jars/{jar_name}:ro"
+    for jar_name in SPARK_GRAPHFRAMES_JARS
+]
 
 spark_compose_dict = {
     "name": "spark-cluster",
@@ -394,7 +430,8 @@ spark_compose_dict = {
                 # labs-setup itself, read-only, so spark_lab.ipynb runs here.
                 f"{LABS_ROOT}:{SPARK_LABS_SETUP_DIR}:ro",
             ]
-            + SPARK_MOUNT_JARS,
+            + SPARK_MOUNT_JARS
+            + SPARK_MOUNT_GRAPHFRAMES_JARS,
             "networks": ["spark-cluster"],
             "hostname": JUPYTER_LAB_COMPOSE_HOST,
             "ports": [
@@ -442,7 +479,8 @@ for i in range(SPARK_TOTAL_WORKERS):
             f"{os.path.join(DOCKER_MOUNTDIR,SPARK_SHARED_WORKSPACE)}:{SPARK_SHARED_WORKSPACE_DIR}",
             f"{os.path.join(DOCKER_MOUNTDIR,SPARK_WORKER_NAMES[i])}:{SPARK_WORKDIR}"
         ]
-        + SPARK_MOUNT_JARS,
+        + SPARK_MOUNT_JARS
+        + SPARK_MOUNT_GRAPHFRAMES_JARS,
         "networks": ["spark-cluster"],
         "hostname": SPARK_WORKER_COMPOSE_HOSTS[i],
         "ports": [
@@ -492,3 +530,17 @@ display(Markdown(f"```yaml\n{spark_compose_yaml_contents}\n```"))
 
 # %%
 run_command(["docker", "compose", "-f", "spark-cluster.docker-compose.yml", "up", "-d", "--wait"])
+
+# %% [markdown]
+# Checks that GraphFrames is ready in the running cluster: the Python package in `spark-jupyter` (the Driver) and both JARs on Spark's default classpath of the Driver and every Worker.
+
+# %%
+graphframes_version = run_command(
+    ["docker", "exec", JUPYTER_LAB_NAME, "python3", "-c", "import graphframes; print(graphframes.__version__)"]
+).output.strip()
+if graphframes_version != "0.12.3":
+    raise RuntimeError(f"spark-jupyter has graphframes-py {graphframes_version!r}, expected '0.12.3'")
+for container_name in [JUPYTER_LAB_NAME, *SPARK_WORKER_NAMES]:
+    for jar_name in SPARK_GRAPHFRAMES_JARS:
+        run_command(["docker", "exec", container_name, "test", "-f", f"/opt/spark/jars/{jar_name}"])
+print(f"GraphFrames {graphframes_version} ready in {JUPYTER_LAB_NAME} and {', '.join(SPARK_WORKER_NAMES)}")

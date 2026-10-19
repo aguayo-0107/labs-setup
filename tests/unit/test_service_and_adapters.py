@@ -48,7 +48,7 @@ def test_service_passes_and_reports():
     service = LabsAuditService(FakeNotebooks(), FakeJars())
     assert isinstance(service, AuditLabsUseCase)
     report = service.audit()
-    assert report.passed and report.notebooks == ["m/m_lab.ipynb"] and len(report.jars) == 4
+    assert report.passed and report.notebooks == ["m/m_lab.ipynb"] and len(report.jars) == 6
 
 
 def test_service_collects_findings():

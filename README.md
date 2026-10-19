@@ -634,7 +634,7 @@ Spark 3.5.7 (Scala 2.12, Java 17, Python 3) with a **custom-built** JupyterLab i
 
 - Base image `apache/spark:3.5.7-scala2.12-java17-python3-ubuntu`
 - Custom images: `dockerfile.spark-jupyter`, `dockerfile.spark-job-venv`
-- Tracked, pinned, SHA-256-validated JARs: `iceberg-spark-runtime-3.5_2.12-1.6.1.jar`, `delta-spark_2.12-3.2.0.jar`, `delta-storage-3.2.0.jar`, `antlr4-runtime-4.9.3.jar`
+- Tracked, pinned, SHA-256-validated JARs: `iceberg-spark-runtime-3.5_2.12-1.6.1.jar`, `delta-spark_2.12-3.2.0.jar`, `delta-storage-3.2.0.jar`, `antlr4-runtime-4.9.3.jar` (mounted at `/opt/spark/course-jars` and listed by the lab session), plus GraphFrames 0.12.3 `graphframes-spark3_2.12-0.12.3.jar` and `graphframes-graphx-spark3_2.12-0.12.3.jar` (mounted on Spark's default classpath `/opt/spark/jars` of `spark-jupyter` and every Worker, so any session can `from graphframes import GraphFrame`; `graphframes-py==0.12.3` is installed in `spark-jupyter`). GraphFrames' `datasketches` dependency is the one the Spark image already ships.
 - The Spark Driver is the notebook kernel inside `spark-jupyter` (JupyterLab on port `6888`): it reaches `spark-master-internal:6077` and `hdfs://namenode:8020` on the Docker network and the workers connect back to `spark-jupyter:4050`/`4051` there, so no connection goes to your computer. labs-setup is mounted read-only at `/opt/spark/work-dir/labs-setup`; run `spark_lab.ipynb` from it in JupyterLab, or with papermill as in `LOAD_ME.md`. Executors use the shipped `venv-pack` Python environment and the bundled classpath.
 - Shared workspace `/opt/spark/shared-workspace`
 

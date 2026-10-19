@@ -36,6 +36,7 @@ These rules apply to maintainers and automation working inside this independent 
   - `delta-spark_2.12-3.2.0.jar`
   - `delta-storage-3.2.0.jar`
   - `antlr4-runtime-4.9.3.jar`
+- Keep the two GraphFrames 0.12.3 JARs tracked and checksum-validated too (`graphframes-spark3_2.12-0.12.3.jar`, `graphframes-graphx-spark3_2.12-0.12.3.jar`). `spark_infra` verifies all six checksums before starting the cluster and mounts the GraphFrames JARs on Spark's default classpath (`/opt/spark/jars`) of `spark-jupyter` and every Worker; `spark-jupyter` installs `graphframes-py==0.12.3`. Do not add GraphFrames' `datasketches` dependency: the Spark image already ships it.
 - The Driver is the notebook kernel inside `spark-jupyter`; it uses Docker-network names (`spark-master-internal`, `namenode`, `spark-jupyter`) so executors never connect to the host. Executors run with the shipped Python environment and bundled JAR classpath.
 
 ## AWS Contract
