@@ -241,9 +241,17 @@ from IPython.display import Markdown, display
 
 # Exact versions: the lab notebooks run inside this image (it is the Spark
 # Driver), and papermill executes spark_lab.ipynb here for acceptance runs.
+# The libraries the lab's code uses on both sides (Driver and Executors) are pinned
+# once here, so spark-jupyter and spark-job-venv install the same versions; the
+# parity check after both builds stops the run if any shared package still differs.
+SPARK_SHARED_PYTHON_PACKAGES = "pandas==2.3.3 pyarrow==25.0.1 numpy==2.2.6 faker==40.36.0"
 dockerfile_spark_jupyter_python_packages = (
-    "pyspark==3.5.7 delta-spark==3.2.0 jupyterlab==4.6.4 pandas==2.3.3 pyarrow==25.0.1 faker==40.36.0 papermill==2.7.0"
-    " graphframes-py==0.12.3"
+    "pyspark==3.5.7 delta-spark==3.2.0 jupyterlab==4.6.4 papermill==2.7.0 graphframes-py==0.12.3 "
+    + SPARK_SHARED_PYTHON_PACKAGES
+)
+# Only the Workers need these (packing the env, and the generators' extra providers).
+spark_job_venv_python_packages = (
+    "venv-pack==0.2.0 faker-commerce==1.0.4 mimesis==22.2.0 " + SPARK_SHARED_PYTHON_PACKAGES
 )
 
 dockerfile_spark_jupyter_name = "dockerfile.spark-jupyter"
@@ -304,7 +312,7 @@ FROM {SPARK_JUPYTER_LAB_DOCKER_TAG}
 RUN mkdir -p {SPARK_JOB_VENV_BUILD_DIR} && \\
         cd {SPARK_JOB_VENV_BUILD_DIR} && \\
         python3 -m venv --copies spark_job_env && \\
-        {SPARK_JOB_VENV_BUILD_DIR}/spark_job_env/bin/pip install venv-pack pandas pyarrow faker faker-commerce mimesis && \\
+        {SPARK_JOB_VENV_BUILD_DIR}/spark_job_env/bin/pip install --no-cache-dir {spark_job_venv_python_packages} && \\
         {SPARK_JOB_VENV_BUILD_DIR}/spark_job_env/bin/venv-pack -p spark_job_env -o spark_job_env.tar.gz
 """
 
@@ -326,6 +334,17 @@ run_command(["docker", "build", "-t", f"{SPARK_JOB_VENV_DOCKER_TAG}", "-f", "doc
 run_command(["docker", "create", "--name", "spark-job-venv", f"{SPARK_JOB_VENV_DOCKER_TAG}"], check=False)
 run_command(["docker", "cp", f"spark-job-venv:{SPARK_JOB_VENV_BUILD_DIR}/spark_job_env.tar.gz", f"{DOCKER_MOUNTDIR}/{SPARK_SHARED_WORKSPACE}/spark_job_env.tar.gz"], check=False)
 run_command(["docker", "rm", "spark-job-venv"], check=False)
+
+# %% [markdown]
+# Stops if the Driver image (spark-jupyter) and the Workers' environment (spark-job-venv) have any shared Python package at different versions, so the Driver and the Executors always run the same library code.
+
+# %%
+from labs_parity import PythonEnvironment, check_python_parity
+
+parity_report = check_python_parity(
+    PythonEnvironment(SPARK_JUPYTER_LAB_DOCKER_TAG, "python3"),
+    PythonEnvironment(SPARK_JOB_VENV_DOCKER_TAG, f"{SPARK_JOB_VENV_BUILD_DIR}/spark_job_env/bin/python3"),
+)
 
 # %% [markdown]
 # # Build Spark images and create spark-cluster.docker-compose.yml

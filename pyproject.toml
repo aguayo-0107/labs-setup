@@ -64,7 +64,7 @@ markers = [
 
 [tool.coverage.run]
 branch = true
-source = ["labs_audit", "athena_gateway", "labs_runtime"]
+source = ["labs_audit", "athena_gateway", "labs_runtime", "labs_parity"]
 # Measure `python -m athena_gateway` when the e2e tier runs it as a process.
 patch = ["subprocess"]
 
