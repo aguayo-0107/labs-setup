@@ -265,6 +265,9 @@ aws_compose_dict = {
                 # AWS managed policies (e.g. AmazonDynamoDBFullAccess) are bundled
                 # with Moto but only loaded on request.
                 "MOTO_IAM_LOAD_MANAGED_POLICIES": "true",
+                # Moto reads a dotted host name (the VPN client name) as
+                # <bucket>.<endpoint>; declaring the client endpoint keeps path-style buckets.
+                "MOTO_S3_CUSTOM_ENDPOINTS": MOTO_CLIENT_URL,
             },
             # Moto starts each Lambda invocation as a sibling container.
             "volumes": ["/var/run/docker.sock:/var/run/docker.sock"],
