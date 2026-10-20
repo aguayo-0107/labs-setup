@@ -435,7 +435,7 @@ wg show
 This directory is an independent `uv` project with its own `pyproject.toml`, `uv.lock`, and `.venv`. Run dependency and notebook commands from `labs-setup`; do not reuse the parent repository's environment.
 
 ```bash
-git clone https://github.com/non-relational-dbs/labs-setup.git
+git clone https://github.com/mavasbel-itam/non-relational-dbs-labs-setup.git labs-setup
 cd labs-setup
 
 # 1. Create the virtual environment with the exact pinned dependencies
