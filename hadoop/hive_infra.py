@@ -80,7 +80,7 @@ os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
 # %% [markdown]
-# Declares the Hive service topology and connection constants: PostgreSQL metastore database credentials, container names and hosts for hive-metastore-db / hive-metastore / hive-server2 / hive-terminal, internal and external ports, warehouse paths, dependent Hadoop endpoints, and image versions.
+# Declares the Hive service topology and connection constants: PostgreSQL metastore database credentials, container names and hosts for hive-metastore-db / hive-metastore / hive-server2, internal and external ports, warehouse paths, dependent Hadoop endpoints, and image versions.
 
 # %%
 HIVE_START_FROM_SCRATCH = START_FROM_SCRATCH
@@ -95,13 +95,17 @@ POSTGRES_DB = "metastore"
 HIVE_DB_CONTAINER_NAME = "hive-metastore-db"
 HIVE_METASTORE_CONTAINER_NAME = "hive-metastore"
 HIVE_SERVER2_CONTAINER_NAME = "hive-server2"
-# The student's terminal for files and HDFS: the Hive and Hadoop clients with
-# HiveServer2's configuration, in its own memory budget so a client JVM never
-# competes with HiveServer2 (which already uses most of its 768M).
-HIVE_TERMINAL_CONTAINER_NAME = "hive-terminal"
+# hive-server2 is also the student's terminal: `docker exec -it -u hive -w /tmp/hive-lab hive-server2 bash`
+# gives the Hive and Hadoop clients with HiveServer2's own configuration. Student files live in
+# HIVE_STUDENT_DIR, apart from HiveServer2's local scratch (/tmp/hive/local) and its log (/tmp/hive).
+# Its memory limit (HIVE_SERVER2_MEMORY) leaves room for HiveServer2 plus the client JVMs a student
+# runs next to it (Beeline, hdfs dfs).
+HIVE_STUDENT_DIR = "/tmp/hive-lab"
+HIVE_SERVER2_MEMORY = "1792M"
+HIVE_SERVER2_CPUS = "2.0"
 
 # Java heap of the two Hive services. The image's entrypoint passes -Xmx1G, larger than the
-# containers' memory limits (768M HiveServer2, 512M metastore), so the JVM may grow its heap
+# containers' memory limits (HIVE_SERVER2_MEMORY, 512M metastore), so the JVM may grow its heap
 # past what the container can hold. A second -Xmx in SERVICE_OPTS comes after the image's on
 # the command line and the last one wins. Measured over the Hive lab and the Hive deck
 # walkthroughs with GC logs (2026-10-18): the largest live heap after a collection was 162 MiB
@@ -649,8 +653,10 @@ hive_compose_dict = {
             # HiveServer2 leaves /opt/hive/conf/hiveserver2.pid in the container layer. After a hard
             # stop (OOM kill, docker kill, host crash) the same container restarts with PID 7 taken by
             # its own shell and refuses to start ("HiveServer2 running as process 7. Stop it first.").
-            # Nothing else runs in the container, so a PID file at start is always stale.
-            "entrypoint": ["sh", "-c", "rm -f /opt/hive/conf/hiveserver2.pid && exec /entrypoint.sh"],
+            # No other HiveServer2 runs in the container, so a PID file at start is always stale.
+            # The same start command creates the students' working folder (owned by hive, the
+            # image's user), so it exists after every start without a one-shot container.
+            "entrypoint": ["sh", "-c", f"rm -f /opt/hive/conf/hiveserver2.pid && mkdir -p {HIVE_STUDENT_DIR} && exec /entrypoint.sh"],
             "depends_on": {
                 HIVE_METASTORE_CONTAINER_NAME: {"condition": "service_healthy"}
             },
@@ -678,7 +684,7 @@ hive_compose_dict = {
             ],
             "extra_hosts": [f"{DOCKER_INTERNAL_HOST}:host-gateway"],
             "dns": DOCKER_DNS,
-            "deploy": {"resources": {"limits": {"cpus": "1.0", "memory": "768M"}}},
+            "deploy": {"resources": {"limits": {"cpus": HIVE_SERVER2_CPUS, "memory": HIVE_SERVER2_MEMORY}}},
             "healthcheck": {
                 "test": [
                     "CMD-SHELL",
@@ -688,35 +694,6 @@ hive_compose_dict = {
                 "timeout": "5s",
                 "retries": 30,
                 "start_period": "15s",
-            },
-        },
-        HIVE_TERMINAL_CONTAINER_NAME: {
-            "image": APACHE_HIVE_IMAGE,
-            "container_name": HIVE_TERMINAL_CONTAINER_NAME,
-            "user": "hive",
-            # No Hive service: an idle shell host for `docker exec -it hive-terminal bash`.
-            # /tmp/hive is created by the hive user (a Compose working_dir would
-            # be created by root first and stay read-only for hive).
-            "entrypoint": ["bash", "-c", "mkdir -p /tmp/hive && exec sleep infinity"],
-            "depends_on": {
-                HIVE_SERVER2_CONTAINER_NAME: {"condition": "service_healthy"}
-            },
-            "environment": {
-                "HADOOP_CONF_DIR": "/hive_custom_conf",
-                "HIVE_CONF_DIR": "/hive_custom_conf",
-            },
-            "volumes": [
-                f"./mount/{HIVE_SERVER2_CONTAINER_NAME}/hive_custom_conf:/hive_custom_conf:ro",
-                f"./mount/{HIVE_SERVER2_CONTAINER_NAME}/hive_custom_conf/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro",
-            ],
-            "networks": ["hadoop-cluster"],
-            "dns": DOCKER_DNS,
-            "deploy": {"resources": {"limits": {"cpus": "1.0", "memory": "768M"}}},
-            "healthcheck": {
-                "test": ["CMD-SHELL", "test -d /tmp/hive"],
-                "interval": "5s",
-                "timeout": "5s",
-                "retries": 12,
             },
         },
     },
@@ -767,10 +744,10 @@ run_command(["docker", "exec", "-u", "hadoop", "namenode", "hdfs", "dfs", "-chow
 run_command(["docker", "exec", "-u", "hadoop", "namenode", "hdfs", "dfs", "-chmod", "-R", "777", f"{HIVE_USERDIR}"], check=False)
 
 # %% [markdown]
-# Starts the full hive-cluster.docker-compose.yml stack in detached mode with --wait, so PostgreSQL, hive-metastore (which first creates or checks its schema), hive-server2 and the student terminal hive-terminal must all pass their healthchecks before execution continues.
+# Starts the full hive-cluster.docker-compose.yml stack in detached mode with --wait, so PostgreSQL, hive-metastore (which first creates or checks its schema) and hive-server2 (also the student's terminal) must all pass their healthchecks before execution continues. --remove-orphans removes containers of this Compose project that the file no longer defines, such as the former hive-terminal.
 
 # %% vscode={"languageId": "markdown"}
-run_command(["docker", "compose", "-f", "hive-cluster.docker-compose.yml", "up", "-d", "--wait"])
+run_command(["docker", "compose", "-f", "hive-cluster.docker-compose.yml", "up", "-d", "--wait", "--remove-orphans"])
 
 # %% [markdown]
 # # Add .beeline dir to hive $HOME

@@ -611,6 +611,7 @@ Hive 4.0.1 with a PostgreSQL 18 metastore, running on **Tez** — the infra note
 
 - Postgres: `hive` / `hive`, db `metastore`
 - No one-shot schema container: `hive-metastore` creates its schema in PostgreSQL on first start and checks it on every later start (`schematool -initOrUpgradeSchema`); HiveServer2 never touches the schema.
+- `hive-server2` is also the students' terminal: `docker exec -it -u hive -w /tmp/hive-lab hive-server2 bash` opens a shell with the Hive (Beeline) and HDFS clients, in the working folder `/tmp/hive-lab` (HiveServer2's own log and scratch files stay in `/tmp/hive`). Its limits are 1792 MB and 2 CPUs so HiveServer2 and the clients a student runs next to it fit together: over the full Hive lab walkthrough its non-reclaimable memory peaked at 62% of the limit, and at 72% with an idle Beeline session, a `GROUP BY` over 2,000,000 rows and a 50 MB `hdfs dfs -put` running at once (measured 2026-10-20).
 - Bundled: `apache-tez-0.10.2-bin.tar.gz` (loaded to HDFS) · `postgresql-42.7.10.jar`
 
 ```mermaid
