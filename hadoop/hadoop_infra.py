@@ -230,6 +230,20 @@ def clear_bind_directory(path):
 if HADOOP_START_FROM_SCRATCH:
     clear_bind_directory(DOCKER_MOUNTDIR)
 
+# Docker otherwise creates a missing bind-mount source directory as root.  Create
+# each source ourselves so the next scratch reset can remove the state without a
+# host-side ownership repair.
+HADOOP_BIND_MOUNT_DIRECTORIES = (
+    "namenode/work-dir",
+    "namenode/name-dir",
+    "resourcemanager/work-dir",
+    *(f"{name}/work-dir" for name in HADOOP_DATANODE_NAMES),
+    *(f"{name}/data-dir" for name in HADOOP_DATANODE_NAMES),
+    *(f"{name}/work-dir" for name in HADOOP_NODEMANAGER_NAMES),
+)
+for relative_path in HADOOP_BIND_MOUNT_DIRECTORIES:
+    (Path(DOCKER_MOUNTDIR) / relative_path).mkdir(parents=True, exist_ok=True)
+
 # %% [markdown]
 # # Auxiliary function
 #

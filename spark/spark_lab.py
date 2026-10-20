@@ -72,9 +72,9 @@ SPARK_SHARED_WORKSPACE_DIR = Path("/opt/spark/shared-workspace")
 SPARK_JARS_DIR = Path("/opt/spark/course-jars")
 if not SPARK_JARS_DIR.is_dir():
     raise RuntimeError("Run this notebook inside the spark-jupyter container (JupyterLab on port 6888)")
-# Hive support writes derby.log and metastore_db/ into the working directory;
-# labs-setup is mounted read-only, the container's work-dir is writable.
-os.chdir("/opt/spark/work-dir")
+# The lab uses only the explicit Iceberg `local` catalog and Delta paths.  It
+# deliberately does not enable Hive support: that would create a local Derby
+# metastore, whose lock state survives an interrupted notebook kernel.
 
 # %% [markdown]
 # ##### Cleaning Spark context
@@ -105,10 +105,12 @@ os.environ["HADOOP_USER_NAME"] = "hadoop"
 
 SPARK_JOB_ARCHIVE = SPARK_SHARED_WORKSPACE_DIR / "spark_job_env.tar.gz"
 SPARK_JARS = {
-    "iceberg-spark-runtime-3.5_2.12-1.6.1.jar": "87e7184f31ef0caac415bbdfcf1bc4943346a58b98d747dc83434f7139e12acb",
-    "delta-spark_2.12-3.2.0.jar": "51d473537d1bc10c81f48b03d8e2a6b604e1b421a70835ec12e917a4245a31d5",
-    "delta-storage-3.2.0.jar": "58aab63eba7736fea9e03eafb0dde6704a34a70f570c1a69ab8e4012c25a95d4",
-    "antlr4-runtime-4.9.3.jar": "131a6594969bc4f321d652ea2a33bc0e378ca312685ef87791b2c60b29d01ea5",
+    "iceberg-spark-runtime-4.1_2.13-1.12.0.jar": "3123c3798af642dd537230923548e013ef41cc28b6626e5225808cf5670a0f82",
+    "delta-spark_2.13-4.3.1.jar": "ebf35a4383f0a653c3ee3c7882c0edcac2f846be31ac61af4b96ccfaaf36c171",
+    "delta-storage-4.3.1.jar": "577c12c7e371be4c041714fb48e88ad86e3c3512beea2bdaffbe7a4debf79718",
+    "delta-kernel-api-4.3.1.jar": "b081b818d6f5686c7d6406588af72c9f8baf6765a41ada8197364aef90a260e8",
+    "delta-kernel-defaults-4.3.1.jar": "27471cca7dd7a36289af2c8d52d2babb37e9e5a13cdaaea76730120f4c72e62f",
+    "delta-kernel-unitycatalog-4.3.1.jar": "a288342b7e53da34a608a1a227c8109aa4681fcb582da499ed19347f2193362b",
 }
 for jar_name, expected_sha256 in SPARK_JARS.items():
     jar_path = SPARK_JARS_DIR / jar_name
@@ -166,7 +168,7 @@ builder = (
         "spark.sql.catalog.spark_catalog",
         "org.apache.spark.sql.delta.catalog.DeltaCatalog",
     )
-    .enableHiveSupport()
+    .config("spark.sql.catalogImplementation", "in-memory")
 )
 spark = builder.getOrCreate()
 

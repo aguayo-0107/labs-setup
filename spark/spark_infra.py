@@ -89,9 +89,9 @@ SPARK_LOCAL_HDFS_HOST = "namenode.lvh.me"
 DOCKER_DNS = [VPN_DNS_IP] if NETWORK_MODE == "vpn" else []
 HOST_BIND_IP = VPN_HOST_IP if NETWORK_MODE == "vpn" else "127.0.0.1"
 
-SPARK_DOCKER_BASE = "spark:3.5.7-scala2.12-java17-python3-ubuntu"
-SPARK_JUPYTER_LAB_DOCKER_TAG = "spark-jupyter:3.5.7-scala2.12-java17-python3-ubuntu"
-SPARK_JOB_VENV_DOCKER_TAG = "spark-job-venv:3.5.7-scala2.12-java17-python3-ubuntu"
+SPARK_DOCKER_BASE = "spark:4.1.2-scala2.13-java17-python3-ubuntu"
+SPARK_JUPYTER_LAB_DOCKER_TAG = "spark-jupyter:4.1.2-scala2.13-java17-python3-ubuntu"
+SPARK_JOB_VENV_DOCKER_TAG = "spark-job-venv:4.1.2-scala2.13-java17-python3-ubuntu"
 SPARK_JOB_VENV_BUILD_DIR = "/opt/spark/venv-build"
 SPARK_EXECUTOR_ENV_DIR = "/opt/spark/executor-env"
 
@@ -160,24 +160,25 @@ path = Path(LOCALHOST_WORKDIR)
 path.mkdir(parents=True, exist_ok=True)
 
 # %% [markdown]
-# Verifies the pinned SHA-256 of every tracked JAR in `jars/` before any image or container uses them: Iceberg, Delta Lake and ANTLR (listed by the lab session) and GraphFrames (mounted on Spark's default classpath). Spark never downloads them.
+# Verifies the pinned SHA-256 of every tracked JAR in `jars/` before any image or container uses them. Spark 4.1.2 already ships its Hadoop, Parquet, Jackson, ANTLR and Scala runtime JARs; only connector JARs absent from that image are vendored here. Spark never downloads them.
 
 # %%
 import hashlib
 
 SPARK_COURSE_JARS = {
-    "iceberg-spark-runtime-3.5_2.12-1.6.1.jar": "87e7184f31ef0caac415bbdfcf1bc4943346a58b98d747dc83434f7139e12acb",
-    "delta-spark_2.12-3.2.0.jar": "51d473537d1bc10c81f48b03d8e2a6b604e1b421a70835ec12e917a4245a31d5",
-    "delta-storage-3.2.0.jar": "58aab63eba7736fea9e03eafb0dde6704a34a70f570c1a69ab8e4012c25a95d4",
-    "antlr4-runtime-4.9.3.jar": "131a6594969bc4f321d652ea2a33bc0e378ca312685ef87791b2c60b29d01ea5",
+    "iceberg-spark-runtime-4.1_2.13-1.12.0.jar": "3123c3798af642dd537230923548e013ef41cc28b6626e5225808cf5670a0f82",
+    "delta-spark_2.13-4.3.1.jar": "ebf35a4383f0a653c3ee3c7882c0edcac2f846be31ac61af4b96ccfaaf36c171",
+    "delta-storage-4.3.1.jar": "577c12c7e371be4c041714fb48e88ad86e3c3512beea2bdaffbe7a4debf79718",
+    "delta-kernel-api-4.3.1.jar": "b081b818d6f5686c7d6406588af72c9f8baf6765a41ada8197364aef90a260e8",
+    "delta-kernel-defaults-4.3.1.jar": "27471cca7dd7a36289af2c8d52d2babb37e9e5a13cdaaea76730120f4c72e62f",
+    "delta-kernel-unitycatalog-4.3.1.jar": "a288342b7e53da34a608a1a227c8109aa4681fcb582da499ed19347f2193362b",
 }
-# GraphFrames 0.12.3 for Spark 3.5 / Scala 2.12 (Maven Central, io.graphframes). Its POM
-# declares datasketches-java 6.2.0, used only by HyperANF (HllSketch). Spark 3.5.7 already
-# ships datasketches-java 3.3.0 in /opt/spark/jars for its own HLL functions; a second copy
-# would shadow it, so GraphFrames uses Spark's (hyper_anf verified on the lab cluster).
+# GraphFrames 0.12.3 is built for this exact Spark 4.1.2 / Scala 2.13 line. Its
+# datasketches-java 6.2.0 dependency is already shipped by Spark 4.1.2, so adding
+# a second copy would only risk classpath shadowing.
 SPARK_GRAPHFRAMES_JARS = {
-    "graphframes-spark3_2.12-0.12.3.jar": "69d7909628caf42bcbe1c7e6e5a5a0901040d00583738d931af41bd72af1d3dc",
-    "graphframes-graphx-spark3_2.12-0.12.3.jar": "8bbd2bbb4c7a3b137e51b4f32f49a30a2ccf70eeb07b452cffa20090dd481b96",
+    "graphframes-spark4_2.13-0.12.3.jar": "a78958f7ea3ac89ed1ea9dbbd1546f403d94151e969bb0de96e33697a5f49f50",
+    "graphframes-graphx-spark4_2.13-0.12.3.jar": "385ea9934bdeedff9cd4591df66ada45ce739148f15fe947a032886997626675",
 }
 for jar_name, expected_sha256 in {**SPARK_COURSE_JARS, **SPARK_GRAPHFRAMES_JARS}.items():
     jar_path = Path(LOCALHOST_WORKDIR) / "jars" / jar_name
@@ -246,7 +247,7 @@ from IPython.display import Markdown, display
 # parity check after both builds stops the run if any shared package still differs.
 SPARK_SHARED_PYTHON_PACKAGES = "pandas==2.3.3 pyarrow==25.0.1 numpy==2.2.6 faker==40.36.0"
 dockerfile_spark_jupyter_python_packages = (
-    "pyspark==3.5.7 delta-spark==3.2.0 jupyterlab==4.6.4 papermill==2.7.0 graphframes-py==0.12.3 "
+    "pyspark==4.1.2 jupyterlab==4.6.4 papermill==2.7.0 graphframes-py==0.12.3 "
     + SPARK_SHARED_PYTHON_PACKAGES
 )
 # Only the Workers need these (packing the env, and the generators' extra providers).

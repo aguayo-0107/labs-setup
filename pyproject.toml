@@ -6,7 +6,6 @@ readme = "README.md"
 requires-python = ">=3.10,<3.11"
 dependencies = [
     "cassandra-driver>=3.29.3",
-    "delta-spark==3.2.0",
     "faker>=39.0.0",
     "faker-commerce>=1.0.4",
     "ipykernel>=7.1.0",
@@ -25,12 +24,12 @@ dependencies = [
     "portforward>=0.7.5",
     "prettytable==3.7.0",
     "pure-sasl>=0.6.2",
-    "pyarrow==22.0.0",
+    "pyarrow==25.0.1",
     "pyasyncore>=1.0.4",
     "pyhive>=0.7.0",
     "pymongo>=4.15.5",
     "pymysql>=1.1.2",
-    "pyspark==3.5.7",
+    "pyspark==4.1.2",
     "python-dotenv>=1.2.1",
     "pyyaml>=6.0.3",
     "redis>=7.1.0",

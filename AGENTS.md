@@ -31,12 +31,10 @@ These rules apply to maintainers and automation working inside this independent 
 ## Spark Contract
 
 - Spark is self-contained and must not resolve Maven packages or download JARs at runtime.
-- Keep these four versioned JARs tracked and validate their pinned SHA-256 checksums before creating a Spark session:
-  - `iceberg-spark-runtime-3.5_2.12-1.6.1.jar`
-  - `delta-spark_2.12-3.2.0.jar`
-  - `delta-storage-3.2.0.jar`
-  - `antlr4-runtime-4.9.3.jar`
-- Keep the two GraphFrames 0.12.3 JARs tracked and checksum-validated too (`graphframes-spark3_2.12-0.12.3.jar`, `graphframes-graphx-spark3_2.12-0.12.3.jar`). `spark_infra` verifies all six checksums before starting the cluster and mounts the GraphFrames JARs on Spark's default classpath (`/opt/spark/jars`) of `spark-jupyter` and every Worker; `spark-jupyter` installs `graphframes-py==0.12.3`. Do not add GraphFrames' `datasketches` dependency: the Spark image already ships it.
+- Keep these Spark 4.1.2 / Scala 2.13 connector JARs tracked and validate their pinned SHA-256 checksums before creating a Spark session:
+  - `iceberg-spark-runtime-4.1_2.13-1.12.0.jar`
+  - Delta 4.3.1: `delta-spark_2.13`, `delta-storage`, `delta-kernel-api`, `delta-kernel-defaults`, and `delta-kernel-unitycatalog`
+- Keep the two GraphFrames 0.12.3 JARs tracked and checksum-validated too (`graphframes-spark4_2.13-0.12.3.jar`, `graphframes-graphx-spark4_2.13-0.12.3.jar`). `spark_infra` verifies all eight checksums before starting the cluster and mounts the GraphFrames JARs on Spark's default classpath (`/opt/spark/jars`) of `spark-jupyter` and every Worker; `spark-jupyter` installs `graphframes-py==0.12.3`. Do not add GraphFrames' `datasketches` dependency: Spark 4.1.2 already ships its exact 6.2.0/3.0.2 runtime pair.
 - The Driver is the notebook kernel inside `spark-jupyter`; it uses Docker-network names (`spark-master-internal`, `namenode`, `spark-jupyter`) so executors never connect to the host. Executors run with the shipped Python environment and bundled JAR classpath.
 
 ## AWS Contract

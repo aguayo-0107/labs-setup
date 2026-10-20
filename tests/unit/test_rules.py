@@ -158,8 +158,8 @@ def test_jar_checksums():
     good = dict(rules.SPARK_JARS)
     assert rules.jar_checksums(good) == []
     bad = dict(good)
-    bad["delta-storage-3.2.0.jar"] = None
-    bad["antlr4-runtime-4.9.3.jar"] = "0" * 64
+    bad["delta-storage-4.3.1.jar"] = None
+    bad["delta-kernel-api-4.3.1.jar"] = "0" * 64
     details = {f.path: f.detail for f in rules.jar_checksums(bad)}
-    assert details["spark/jars/delta-storage-3.2.0.jar"] == "missing"
-    assert details["spark/jars/antlr4-runtime-4.9.3.jar"].startswith("sha256 000")
+    assert details["spark/jars/delta-storage-4.3.1.jar"] == "missing"
+    assert details["spark/jars/delta-kernel-api-4.3.1.jar"].startswith("sha256 000")

@@ -48,7 +48,7 @@ def test_service_passes_and_reports():
     service = LabsAuditService(FakeNotebooks(), FakeJars())
     assert isinstance(service, AuditLabsUseCase)
     report = service.audit()
-    assert report.passed and report.notebooks == ["m/m_lab.ipynb"] and len(report.jars) == 6
+    assert report.passed and report.notebooks == ["m/m_lab.ipynb"] and len(report.jars) == 8
 
 
 def test_service_collects_findings():
@@ -83,10 +83,10 @@ def test_filesystem_adapters(tmp_path):
 
     jars = tmp_path / "spark" / "jars"
     jars.mkdir(parents=True)
-    (jars / "delta-storage-3.2.0.jar").write_bytes(b"jar")
+    (jars / "delta-storage-4.3.1.jar").write_bytes(b"jar")
     digests = FileJarStore(tmp_path).digests()
-    assert digests["delta-storage-3.2.0.jar"] == hashlib.sha256(b"jar").hexdigest()
-    assert digests["antlr4-runtime-4.9.3.jar"] is None
+    assert digests["delta-storage-4.3.1.jar"] == hashlib.sha256(b"jar").hexdigest()
+    assert digests["delta-kernel-api-4.3.1.jar"] is None
 
 
 class FakeAudit(AuditLabsUseCase):

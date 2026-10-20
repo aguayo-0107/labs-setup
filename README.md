@@ -51,7 +51,7 @@ You never hand-edit a raw Compose file. The notebooks generate them from Python 
 | | |
 |---|---|
 | **Language / tooling** | Python 3.10 · Jupyter · uv · Docker Compose v2 (Java 17 and the AWS CLI run inside containers) |
-| **Databases & engines** | Cassandra 5.0 · MongoDB 7.0 · Hadoop 3.4.3 · Hive 4.0.1 · Spark 3.5.7 · OpenSearch 3.4.0 · Redis 8.4 · Neo4j (ubi9) · AWS emulated locally (Moto 5.2.4 + Athena gateway) |
+| **Databases & engines** | Cassandra 5.0 · MongoDB 7.0 · Hadoop 3.4.3 · Hive 4.0.1 · Spark 4.1.2 · OpenSearch 3.4.0 · Redis 8.4 · Neo4j (ubi9) · AWS emulated locally (Moto 5.2.4 + Athena gateway) |
 | **Topology** | Distributed, multi-node, with Local loopback and alias-aware VPN client paths |
 | **Learning model** | `infra` (deploy) → `lab` (learn) notebook pairs |
 
@@ -71,7 +71,7 @@ flowchart LR
         C["Cassandra 5.0 ×3"]
         M["MongoDB 7.0 ×3 + configsvr"]
         H["Hadoop 3.4.3 + Hive 4.0.1"]
-        S["Spark 3.5.7 master + 3 workers"]
+        S["Spark 4.1.2 master + 3 workers"]
         O["OpenSearch 3.4.0 ×3"]
         R["Redis 8.4 ×6"]
         N["Neo4j"]
@@ -94,7 +94,7 @@ flowchart LR
 | MongoDB | `mongo:7.0` | 3 + 3 config servers | `mongodb_infra.ipynb` · `mongodb_infra_configsvr.ipynb` | `mongodb_lab.ipynb` |
 | Hadoop | `apache/hadoop:3.4.3` | namenode + 2 datanodes | `hadoop_infra.ipynb` | `hadoop_lab.ipynb` |
 | Hive | `apache/hive:4.0.1` + `postgres:18` | metastore + server2 | `hive_infra.ipynb` | `hive_lab.ipynb` |
-| Spark | `apache/spark:3.5.7-…` + custom | master + 3 workers + JupyterLab | `spark_infra.ipynb` | `spark_lab.ipynb` |
+| Spark | `apache/spark:4.1.2-…` + custom | master + 3 workers + JupyterLab | `spark_infra.ipynb` | `spark_lab.ipynb` |
 | OpenSearch | `opensearchproject/opensearch:3.4.0` | 3 + dashboards | `opensearch_infra.ipynb` | `opensearch_lab.ipynb` |
 | Redis | `redis:8.4.0-bookworm` | 6 (cluster) | `redis_infra.ipynb` | `redis_lab.ipynb` |
 | Neo4j | `neo4j:ubi9` | 1 (+ APOC, GDS) | `neo4j_infra.ipynb` | `neo4j_lab.ipynb` |
@@ -328,7 +328,7 @@ Then install these extensions (open the Extensions view with `Ctrl+Shift+X`, or 
 
 ### 4. uv (Python 3.10 + dependencies)
 
-`uv` is the package manager this repo uses (it replaces `pip` + `venv` and installs the pinned Python 3.10 runtime for you). Python 3.10 matches the Spark 3.5.7 executors.
+`uv` is the package manager this repo uses (it replaces `pip` + `venv` and installs the pinned Python 3.10 runtime for you). Python 3.10 matches the Spark 4.1.2 executors.
 
 <details>
 <summary><b>Windows</b> (PowerShell)</summary>
@@ -625,7 +625,7 @@ The lab creates external tables, runs aggregations, and explores partitioning �
 
 ### Spark
 
-Spark 3.5.7 (Scala 2.12, Java 17, Python 3) with a **custom-built** JupyterLab image and a **venv-pack** job environment (for shipping self-contained Python virtualenvs to workers). Delta Lake and Apache Iceberg dependencies are bundled, so Spark does not resolve Maven packages or download JARs at runtime.
+Spark 4.1.2 (Scala 2.13, Java 17, Python 3) with a **custom-built** JupyterLab image and a **venv-pack** job environment (for shipping self-contained Python virtualenvs to workers). Delta Lake and Apache Iceberg dependencies are bundled, so Spark does not resolve Maven packages or download JARs at runtime.
 
 | Component | Port |
 |---|---|
@@ -633,9 +633,9 @@ Spark 3.5.7 (Scala 2.12, Java 17, Python 3) with a **custom-built** JupyterLab i
 | spark-worker 1 / 2 / 3 | 6081 / 6082 / 6083 (web UI) |
 | JupyterLab | 6888 · 4040 (Spark monitor) |
 
-- Base image `apache/spark:3.5.7-scala2.12-java17-python3-ubuntu`
+- Base image `apache/spark:4.1.2-scala2.13-java17-python3-ubuntu`
 - Custom images: `dockerfile.spark-jupyter`, `dockerfile.spark-job-venv`
-- Tracked, pinned, SHA-256-validated JARs: `iceberg-spark-runtime-3.5_2.12-1.6.1.jar`, `delta-spark_2.12-3.2.0.jar`, `delta-storage-3.2.0.jar`, `antlr4-runtime-4.9.3.jar` (mounted at `/opt/spark/course-jars` and listed by the lab session), plus GraphFrames 0.12.3 `graphframes-spark3_2.12-0.12.3.jar` and `graphframes-graphx-spark3_2.12-0.12.3.jar` (mounted on Spark's default classpath `/opt/spark/jars` of `spark-jupyter` and every Worker, so any session can `from graphframes import GraphFrame`; `graphframes-py==0.12.3` is installed in `spark-jupyter`). GraphFrames' `datasketches` dependency is the one the Spark image already ships.
+- Tracked, pinned, SHA-256-validated JARs: `iceberg-spark-runtime-4.1_2.13-1.12.0.jar` and Delta 4.3.1's `delta-spark_2.13`, `delta-storage`, `delta-kernel-api`, `delta-kernel-defaults`, and `delta-kernel-unitycatalog` (mounted at `/opt/spark/course-jars` and listed by the lab session), plus GraphFrames 0.12.3 `graphframes-spark4_2.13-0.12.3.jar` and `graphframes-graphx-spark4_2.13-0.12.3.jar` (mounted on Spark's default classpath `/opt/spark/jars` of `spark-jupyter` and every Worker, so any session can `from graphframes import GraphFrame`; `graphframes-py==0.12.3` is installed in `spark-jupyter`). GraphFrames' `datasketches` dependency is the exact 6.2.0/3.0.2 pair Spark 4.1.2 already ships.
 - The Spark Driver is the notebook kernel inside `spark-jupyter` (JupyterLab on port `6888`): it reaches `spark-master-internal:6077` and `hdfs://namenode:8020` on the Docker network and the workers connect back to `spark-jupyter:4050`/`4051` there, so no connection goes to your computer. labs-setup is mounted read-only at `/opt/spark/work-dir/labs-setup`; run `spark_lab.ipynb` from it in JupyterLab, or with papermill as in `LOAD_ME.md`. Executors use the shipped `venv-pack` Python environment and the bundled classpath.
 - The Python libraries used on both sides (`pandas`, `pyarrow`, `numpy`, `faker`) are pinned once in `spark_infra` (`SPARK_SHARED_PYTHON_PACKAGES`) for both images; the Worker-only packages (`venv-pack`, `faker-commerce`, `mimesis`) are pinned too. After both builds, `labs_parity` compares `pip freeze` of `spark-jupyter` and of the Worker environment and stops the run if any package installed in both differs.
 - Shared workspace `/opt/spark/shared-workspace`
