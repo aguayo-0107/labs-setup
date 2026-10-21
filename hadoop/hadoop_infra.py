@@ -346,6 +346,7 @@ env_content = {
     "HDFS-SITE.XML_dfs.namenode.datanode.registration.ip-hostname-check": "false",  # Para que no intente resolucion DNS inversa
     "HDFS-SITE.XML_dfs.datanode.data.dir": HADOOP_DATANODE_DATADIR,
     "HDFS-SITE.XML_dfs.datanode.use.datanode.hostname": "true",
+    "HDFS-SITE.XML_dfs.client.use.datanode.hostname": "true",  # El cliente escribe a cada DataNode por su nombre (alias de la red o, en VPN, el publicado), no por su IP interna de Docker
     # [NUEVOS PARÁMETROS HDFS]
     "HDFS-SITE.XML_dfs.blocksize": "134217728",  # Tamaño de bloque en bytes (134217728 = 128 MB)
     "HDFS-SITE.XML_dfs.namenode.handler.count": "20",  # Número de hilos del NameNode para peticiones
