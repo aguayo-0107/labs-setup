@@ -37,6 +37,10 @@ These rules apply to maintainers and automation working inside this independent 
 - Keep the two GraphFrames 0.12.3 JARs tracked and checksum-validated too (`graphframes-spark4_2.13-0.12.3.jar`, `graphframes-graphx-spark4_2.13-0.12.3.jar`). `spark_infra` verifies all eight checksums before starting the cluster and mounts the GraphFrames JARs on Spark's default classpath (`/opt/spark/jars`) of `spark-jupyter` and every Worker; `spark-jupyter` installs `graphframes-py==0.12.3`. Do not add GraphFrames' `datasketches` dependency: Spark 4.1.2 already ships its exact 6.2.0/3.0.2 runtime pair.
 - The Driver is the notebook kernel inside `spark-jupyter`; it uses Docker-network names (`spark-master-internal`, `namenode`, `spark-jupyter`) so executors never connect to the host. Executors run with the shipped Python environment and bundled JAR classpath.
 
+## Notebook Documentation
+
+- Every code cell is preceded by a markdown cell with a numbered `## ` heading and **What / Why / How** bullets, written in English; references are `📄` links to official documentation, each answering HTTP 200 and stating the cited fact. `labs_audit` enforces the structure and `https://` links; `LABS_LINKS=1 uv run pytest tests/live/test_notebook_links.py` checks every link answers 200.
+
 ## AWS Contract
 
 - The AWS lab must never use a real AWS account or create billable resources. It runs only against the local emulator started by `aws/aws_infra`: Moto for S3, DynamoDB, IAM, STS and Lambda, and the Athena gateway (`athena_gateway/`) with its HiveServer2 engine.

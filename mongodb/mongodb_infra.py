@@ -13,7 +13,14 @@
 # ---
 
 # %% [markdown]
-# # Setup
+# # MongoDB replica set — infrastructure
+#
+# ## 1. Parameters
+#
+# - **What:** default values for `NETWORK_MODE`, the VPN identity and `START_FROM_SCRATCH`.
+# - **Why:** the same notebook serves Local mode (ports on `127.0.0.1`) and VPN mode (`<container>.<alias>.<domain>`).
+# - **How:** the cell is tagged `parameters`; papermill inserts an `injected-parameters` cell right after it with the `-p` values.
+# - 📄 [papermill — Parameterize](https://papermill.readthedocs.io/en/latest/usage-parameterize.html)
 
 # %% tags=["parameters"]
 # Local mode is the portable default; VPN mode publishes services on this host.
@@ -25,7 +32,11 @@ VPN_CLIENT_ALIAS = "mavasbel"
 START_FROM_SCRATCH = False
 
 # %% [markdown]
-# Validates and normalizes the papermill-injected network parameters, rejecting any NETWORK_MODE other than lowercase `local` or `vpn`, checking that VPN_HOST_IP belongs to the 10.15.20.* subnet, and composing VPN_CLIENT_DOMAIN from VPN_CLIENT_ALIAS and VPN_DOMAIN.
+# ## 2. Validate the parameters
+#
+# - **What:** lower-cases `NETWORK_MODE` and `VPN_CLIENT_ALIAS` and builds `VPN_CLIENT_DOMAIN = <alias>.<domain>`.
+# - **Why:** a wrong value must stop the notebook here, before any container changes.
+# - **How:** rejects any mode other than `local`/`vpn` and, in VPN mode, a host IP outside `10.15.20.*`, and an alias that is not lower-case letters, digits and inner hyphens.
 
 # %%
 import re
@@ -46,7 +57,11 @@ if re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", VPN_CLIENT_ALIAS) is None:
 VPN_CLIENT_DOMAIN = f"{VPN_CLIENT_ALIAS}.{VPN_DOMAIN}"
 
 # %% [markdown]
-# Locates the labs-setup project root by walking parent directories until it finds a `pyproject.toml` alongside the `cassandra` and `mongodb` folders, then changes the working directory to the mongodb module.
+# ## 3. Find the module folder
+#
+# - **What:** locates the labs-setup root, changes into `mongodb/` and imports `run_command`.
+# - **Why:** relative paths (Compose file, `mount/`) then resolve the same way whether papermill or JupyterLab started the kernel; `run_command` passes an argument list to the program without a shell, so it behaves the same on Windows, macOS and Linux.
+# - **How:** walks up from the current folder to the first one holding `pyproject.toml`, `cassandra/` and `mongodb/`.
 
 # %%
 # Resolve module assets from the labs-setup root.
@@ -79,7 +94,11 @@ os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
 # %% [markdown]
-# Derives the replica set topology for `MONGODB_REPLICA_SET`: three node names (`mongodb-node-1` through `mongodb-node-3`), ports starting at 27011, admin credentials, and mode-dependent client, advertised, and Compose hostnames built with `vpn_fqdn`.
+# ## 4. Replica set settings
+#
+# - **What:** names the replica set `replica_set_0` and its three members `mongodb-node-1..3`, on ports `27011-27013`, with root user `admin`/`admin`.
+# - **Why:** every member publishes on the same host, so each needs its own port; clients reach `127.0.0.1` (Local) or `mongodb-node-N.<alias>.<domain>` (VPN).
+# - **How:** members announce themselves by container name in Local mode and by VPN name in VPN mode, so the address a client receives from the replica set is one it can resolve.
 
 # %%
 MONGODB_START_FROM_SCRATCH = START_FROM_SCRATCH
@@ -117,7 +136,12 @@ MONGO_INITDB_ROOT_PASSWORD = "admin"
 MONGO_INITDB_DATABASE = "admin"
 
 # %% [markdown]
-# Resolves the host bind-mount directory under `MODULE_DIR/mount` and creates it, defining `MONGODB_LOCAL_CLUSTER_KEY_PATH` for the shared mongo-keyfile used to secure the replica set.
+# ## 5. Host folders
+#
+# - **What:** defines `mount/` (one data folder per member) and the path of the shared keyfile, and creates `mount/`.
+# - **Why:** data written by a member survives a container restart.
+# - **How:** paths built from `MODULE_DIR` with `os.path.join`.
+# - 📄 [Docker — Bind mounts](https://docs.docker.com/engine/storage/bind-mounts/)
 
 # %%
 import os
@@ -131,7 +155,12 @@ mount_path = Path(DOCKER_MOUNTDIR)
 mount_path.mkdir(parents=True, exist_ok=True)
 
 # %% [markdown]
-# # Stop mongodb-cluster.docker-compose.yml
+# ## 6. Stop the previous replica set
+#
+# - **What:** with `START_FROM_SCRATCH=True`, removes the containers, network and volumes.
+# - **Why:** a fresh build must not reuse old members; with `False` the running set is kept.
+# - **How:** `docker compose -f mongodb-cluster.docker-compose.yml down -v` (`check=False`: a missing file is not an error).
+# - 📄 [docker compose down](https://docs.docker.com/reference/cli/docker/compose/down/)
 
 # %%
 import subprocess
@@ -146,7 +175,12 @@ else:
 
 
 # %% [markdown]
-# When START_FROM_SCRATCH is true, removes the mongo-keyfile and wipes every bind-mount directory through `clear_bind_directory`, which deletes contents via `rm -rf` inside a throwaway `mongo:7.0` container; otherwise existing state is left untouched.
+# ## 7. Delete the old state
+#
+# - **What:** with `START_FROM_SCRATCH=True`, empties `mount/`, keyfile included.
+# - **Why:** the containers change the owner of those files to uid 999, so the host user cannot always delete them.
+# - **How:** `rm -rf` runs as root inside a throwaway `mongo:7.0` container that sees `mount/` as `/target`.
+# - 📄 [docker container run](https://docs.docker.com/reference/cli/docker/container/run/)
 
 # %%
 import shutil
@@ -177,7 +211,12 @@ if MONGODB_START_FROM_SCRATCH:
     assert not os.path.exists(MONGODB_LOCAL_CLUSTER_KEY_PATH)
 
 # %% [markdown]
-# # Start mongodb-cluster.docker-compose.yml
+# ## 8. Keyfile and Compose file
+#
+# - **What:** writes a random keyfile (756 bytes, base64) and generates `mongodb-cluster.docker-compose.yml` with three `mongo:7.0` services.
+# - **Why:** members authenticate to each other with the keyfile, which also turns on access control for clients.
+# - **How:** each member runs `mongod --replSet replica_set_0 --keyFile ... --bind_ip_all --port <port>` after making the keyfile owned by `mongodb` and read-only; the image creates the root user from `MONGO_INITDB_ROOT_*`; the health check is `db.adminCommand('ping')`; 1 CPU and 1 GB per member.
+# - 📄 [MongoDB 7.0 — Internal/membership authentication](https://www.mongodb.com/docs/v7.0/core/security-internal-authentication/) · [mongod options](https://www.mongodb.com/docs/v7.0/reference/program/mongod/) · [mongo image — environment variables](https://raw.githubusercontent.com/docker-library/docs/master/mongo/content.md)
 
 # %%
 import os
@@ -289,13 +328,23 @@ with open(mongodb_compose_yaml_path, "w", encoding="utf-8", newline="\n") as f:
 display(Markdown(f"```yaml\n{mongodb_compose_yaml_contents}\n```"))
 
 # %% [markdown]
-# Brings up the three `mongod` services defined in `mongodb-cluster.docker-compose.yml` in detached mode and waits until every healthcheck reports healthy.
+# ## 9. Start the members
+#
+# - **What:** starts the three members and waits until their health checks pass.
+# - **Why:** the replica set can only be initiated once every member answers.
+# - **How:** `docker compose up -d --wait`.
+# - 📄 [docker compose up](https://docs.docker.com/reference/cli/docker/compose/up/)
 
 # %%
 run_command(["docker", "compose", "-f", "mongodb-cluster.docker-compose.yml", "up", "-d", "--wait"])
 
 # %% [markdown]
-# Initiates the replica set with `replSetInitiate` over a direct pymongo `MongoClient` connection to the first node, then polls each member's `hello` command until a PRIMARY is elected within 30 seconds and verifies via `replSetGetStatus` that the cluster reports exactly one PRIMARY and two SECONDARY members.
+# ## 10. Initiate the replica set and wait for a primary
+#
+# - **What:** sends `replSetInitiate` with the three members, then waits up to 30 s for one member to become primary.
+# - **Why:** until a primary is elected the set accepts no writes.
+# - **How:** connects straight to member 1 (`directConnection=True`); an "already initialized" error is accepted on a re-run. It polls `hello` on each member until `isWritablePrimary`, then asserts 1 `PRIMARY` and 2 `SECONDARY` in `replSetGetStatus`.
+# - 📄 [MongoDB 7.0 — Deploy a replica set with keyfile access control](https://www.mongodb.com/docs/v7.0/tutorial/deploy-replica-set-with-keyfile-access-control/) · [replSetInitiate](https://www.mongodb.com/docs/v7.0/reference/command/replSetInitiate/) · [hello](https://www.mongodb.com/docs/v7.0/reference/command/hello/) · [replSetGetStatus](https://www.mongodb.com/docs/v7.0/reference/command/replSetGetStatus/) · [PyMongo 4.17.0 — MongoClient](https://pymongo.readthedocs.io/en/4.17.0/api/pymongo/mongo_client.html)
 
 # %%
 import time
@@ -382,7 +431,12 @@ else:
         print(f"{icon} {m['name']:<35} | {m['stateStr']:<10}")
 
 # %% [markdown]
-# Reference shell snippets for opening authenticated `mongosh` sessions on each of the three nodes through `docker exec`.
+# ## 11. Manual shell (optional)
+#
+# - **What:** commented `docker exec ... mongosh` lines for each member.
+# - **Why:** they open an authenticated shell for checks by hand; the notebook never runs them.
+# - **How:** copy one line to a terminal without the leading `#` or `# !`.
+# - 📄 [mongosh](https://www.mongodb.com/docs/mongodb-shell/)
 
 # %%
 # docker exec -it mongodb-node-1 mongosh --port 27011 -u "admin" -p "admin" --authenticationDatabase "admin"

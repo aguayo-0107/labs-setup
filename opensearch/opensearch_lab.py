@@ -13,12 +13,14 @@
 # ---
 
 # %% [markdown]
-# # OpenSearch: indexing, search, and analytics
+# # OpenSearch lab — search with opensearch-py
 #
-# This lab validates the three-node OpenSearch cluster and performs real index,
-# document, search, aggregation, and update operations. Run
-# `opensearch_infra.ipynb` first and wait for all three nodes to become healthy.
+# ## 1. Parameters
 #
+# - **What:** default values for `NETWORK_MODE`, the VPN identity.
+# - **Why:** the same notebook serves Local mode (ports on `127.0.0.1`) and VPN mode (`<container>.<alias>.<domain>`).
+# - **How:** the cell is tagged `parameters`; papermill inserts an `injected-parameters` cell right after it with the `-p` values.
+# - 📄 [papermill — Parameterize](https://papermill.readthedocs.io/en/latest/usage-parameterize.html)
 
 # %% tags=["parameters"]
 # Local mode is the portable default; VPN mode publishes services on this host.
@@ -29,7 +31,11 @@ VPN_DOMAIN = "vpn.itam.mx"
 VPN_CLIENT_ALIAS = "mavasbel"
 
 # %% [markdown]
-# Validates the papermill-injected NETWORK_MODE and VPN_CLIENT_ALIAS values, accepting only lowercase local or vpn mode, and derives the student's VPN_CLIENT_DOMAIN for VPN addressing.
+# ## 2. Validate the parameters
+#
+# - **What:** lower-cases `NETWORK_MODE` and `VPN_CLIENT_ALIAS` and builds `VPN_CLIENT_DOMAIN = <alias>.<domain>`.
+# - **Why:** a wrong value must stop the notebook here, before any container changes.
+# - **How:** rejects any mode other than `local`/`vpn` and, in VPN mode, a host IP outside `10.15.20.*`, and an alias that is not lower-case letters, digits and inner hyphens.
 
 # %%
 import re
@@ -50,7 +56,11 @@ if re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", VPN_CLIENT_ALIAS) is None:
 VPN_CLIENT_DOMAIN = f"{VPN_CLIENT_ALIAS}.{VPN_DOMAIN}"
 
 # %% [markdown]
-# Locates the labs-setup project root by walking up from the current directory until a pyproject.toml with the cassandra and mongodb module directories is found, then changes into the opensearch module directory.
+# ## 3. Find the module folder
+#
+# - **What:** locates the labs-setup root, changes into `opensearch/` and imports `run_command`.
+# - **Why:** relative paths (Compose file, `mount/`) then resolve the same way whether papermill or JupyterLab started the kernel; `run_command` passes an argument list to the program without a shell, so it behaves the same on Windows, macOS and Linux.
+# - **How:** walks up from the current folder to the first one holding `pyproject.toml`, `cassandra/` and `mongodb/`.
 
 # %%
 # Resolve module assets from the labs-setup root.
@@ -78,7 +88,11 @@ print(f"Working directory: {MODULE_DIR}")
 
 
 # %% [markdown]
-# Defines the three-node cluster endpoints on ports 9201-9203, the admin credentials used by opensearchpy, the course-products index name, and whether DELETE_INDEX_AT_END removes it during cleanup.
+# ## 4. Connection constants
+#
+# - **What:** the three node hosts on ports `9201-9203`, the user `admin` / `OpenSearchP455` and the index name `course-products`.
+# - **Why:** they must match what `opensearch_infra` configured.
+# - **How:** hosts are `127.0.0.1` (Local) or `opensearch-node-N.<alias>.<domain>` (VPN); `DELETE_INDEX_AT_END=False` keeps the index for exploring.
 
 # %%
 OPENSEARCH_NODE_NAMES = [f"opensearch-node-{i}" for i in range(1, 4)]
@@ -100,12 +114,12 @@ DELETE_INDEX_AT_END = False
 
 
 # %% [markdown]
-# ## 1. Connect securely to the lab cluster
+# ## 5. Connect securely to the lab cluster
 #
-# The local cluster uses OpenSearch's generated demonstration certificate. TLS is
-# enabled, while certificate verification is disabled only for this isolated
-# teaching environment.
-#
+# - **What:** opens an `OpenSearch` client to the three nodes and checks the cluster has 3 nodes and status `yellow` or `green`.
+# - **Why:** the cluster uses OpenSearch's demo certificate: TLS stays on, but certificate checks are off because that certificate is self-signed and is only acceptable in this isolated lab.
+# - **How:** `use_ssl=True`, `verify_certs=False`, `ssl_assert_hostname=False`, basic auth and gzip (`http_compress=True`); `cluster.health()` and `nodes.info()`.
+# - 📄 [opensearch-py 3.0.0 — User guide](https://raw.githubusercontent.com/opensearch-project/opensearch-py/v3.0.0/USER_GUIDE.md) · [Demo security configuration](https://docs.opensearch.org/3.4/security/configuration/demo-configuration/) · [Cluster health API](https://docs.opensearch.org/3.4/api-reference/cluster-api/cluster-health/)
 
 # %%
 from opensearchpy import OpenSearch, helpers
@@ -133,11 +147,12 @@ print(
 
 
 # %% [markdown]
-# ## 2. Create an index with explicit mappings
+# ## 6. Create an index with explicit mappings
 #
-# The index uses three primary shards so data can be distributed across the
-# three-node cluster. A replica protects each primary shard.
-#
+# - **What:** recreates `course-products` with 3 primary shards, 1 replica each, and a fixed type per field.
+# - **Why:** three primaries spread the data over the three nodes and a replica protects each one; explicit mappings stop OpenSearch from guessing types.
+# - **How:** `name` is `text` (searched word by word) with a `keyword` sub-field (exact value); `category` is `keyword`; `price` `double`, `stock` `integer`, `created_at` `date`.
+# - 📄 [Create index](https://docs.opensearch.org/3.4/api-reference/index-apis/create-index/) · [Supported field types](https://docs.opensearch.org/3.4/mappings/supported-field-types/index/) · [Keyword field type](https://docs.opensearch.org/3.4/mappings/supported-field-types/keyword/)
 
 # %%
 if client.indices.exists(index=OPENSEARCH_INDEX):
@@ -168,8 +183,12 @@ print(f"Created index: {OPENSEARCH_INDEX}")
 
 
 # %% [markdown]
-# ## 3. Bulk-index a concrete product catalog
+# ## 7. Bulk-index a product catalog
 #
+# - **What:** indexes six products in one request and checks all six are searchable.
+# - **Why:** one bulk request instead of six; `refresh` makes the documents visible to search immediately.
+# - **How:** `helpers.bulk` with one `index` action per product, using its `id` as `_id`; then `count()` must be 6.
+# - 📄 [Bulk API](https://docs.opensearch.org/3.4/api-reference/document-apis/bulk/) · [opensearch-py 3.0.0 — User guide](https://raw.githubusercontent.com/opensearch-project/opensearch-py/v3.0.0/USER_GUIDE.md)
 
 # %%
 products = [
@@ -246,11 +265,12 @@ print(f"Indexed and refreshed {indexed_count} products")
 
 
 # %% [markdown]
-# ## 4. Full-text search
+# ## 8. Full-text search
 #
-# Search the analyzed `name` and `description` fields. The assertions turn the
-# example into a reproducible smoke test rather than a visual-only demonstration.
-#
+# - **What:** searches "monitor data" in `name` and `description` and checks exactly 2 hits.
+# - **Why:** full-text fields are split into words, so a query matches documents that contain any of its words.
+# - **How:** `multi_match` with `name^2` (a match in the name counts twice); results sorted by score, then by price.
+# - 📄 [Multi-match query](https://docs.opensearch.org/3.4/query-dsl/full-text/multi-match/)
 
 # %%
 search_response = client.search(
@@ -273,8 +293,12 @@ for hit in hits:
 
 
 # %% [markdown]
-# ## 5. Aggregate by category and average price
+# ## 9. Aggregate by category and average price
 #
+# - **What:** counts the products per category and averages their price.
+# - **Why:** aggregations summarise the data on the server; `size: 0` returns no documents, only the summary.
+# - **How:** a `terms` bucket on `category` with an `avg` of `price` inside; the cell checks 2 products per category.
+# - 📄 [Terms aggregation](https://docs.opensearch.org/3.4/aggregations/bucket/terms/) · [Average aggregation](https://docs.opensearch.org/3.4/aggregations/metric/average/)
 
 # %%
 aggregation_response = client.search(
@@ -301,8 +325,12 @@ for bucket in buckets:
 
 
 # %% [markdown]
-# ## 6. Update and verify one document
+# ## 10. Update and verify one document
 #
+# - **What:** sets the stock of `p-004` to 5 and reads it back.
+# - **Why:** a partial update changes only the given fields.
+# - **How:** `update(..., body={"doc": {"stock": 5}}, refresh=True)`, then `get`.
+# - 📄 [Update document](https://docs.opensearch.org/3.4/api-reference/document-apis/update-document/)
 
 # %%
 client.update(
@@ -317,11 +345,12 @@ print(f"Updated p-004 stock to {updated['_source']['stock']}")
 
 
 # %% [markdown]
-# ## 7. Inspect shard distribution
+# ## 11. Inspect shard distribution
 #
-# The result confirms that the index's primary and replica shards are allocated
-# across the cluster rather than remaining on one node.
-#
+# - **What:** waits until the index is `green` with 6 started shards, then prints where each shard lives.
+# - **Why:** it shows the 3 primaries and 3 replicas spread over at least two nodes; requests go to different nodes, and a node can briefly report an older cluster state, so the cell waits until both checks agree.
+# - **How:** up to 30 rounds of `cluster.health(index=...)` and `cat.shards(format="json")`, 2 s apart.
+# - 📄 [Cluster health API](https://docs.opensearch.org/3.4/api-reference/cluster-api/cluster-health/) · [CAT shards](https://docs.opensearch.org/3.4/api-reference/cat/cat-shards/)
 
 # %%
 import time
@@ -356,8 +385,12 @@ for shard in shards:
 
 
 # %% [markdown]
-# ## 8. Optional cleanup
+# ## 12. Optional cleanup
 #
+# - **What:** deletes the index only if `DELETE_INDEX_AT_END=True`, then closes the client.
+# - **Why:** by default the index stays so it can be explored in Dashboards (`5601`).
+# - **How:** `indices.delete(index=...)`.
+# - 📄 [opensearch-py 3.0.0 — User guide](https://raw.githubusercontent.com/opensearch-project/opensearch-py/v3.0.0/USER_GUIDE.md)
 
 # %%
 if DELETE_INDEX_AT_END:

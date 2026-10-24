@@ -13,7 +13,14 @@
 # ---
 
 # %% [markdown]
-# # Setup
+# # Spark — infrastructure (Standalone cluster + JupyterLab on the Hadoop network)
+#
+# ## 1. Parameters
+#
+# - **What:** default values for `NETWORK_MODE`, the VPN identity and `START_FROM_SCRATCH`.
+# - **Why:** the same notebook serves Local mode (ports on `127.0.0.1`) and VPN mode (`<container>.<alias>.<domain>`).
+# - **How:** the cell is tagged `parameters`; papermill inserts an `injected-parameters` cell right after it with the `-p` values.
+# - 📄 [papermill — Parameterize](https://papermill.readthedocs.io/en/latest/usage-parameterize.html)
 
 # %% tags=["parameters"]
 # Local mode is the portable default; VPN mode publishes services on this host.
@@ -25,7 +32,11 @@ VPN_CLIENT_ALIAS = "mavasbel"
 START_FROM_SCRATCH = False
 
 # %% [markdown]
-# Validates the papermill-injected NETWORK_MODE and VPN_CLIENT_ALIAS values and derives VPN_CLIENT_DOMAIN as `<alias>.<VPN_DOMAIN>` for later VPN-mode host naming.
+# ## 2. Validate the parameters
+#
+# - **What:** lower-cases `NETWORK_MODE` and `VPN_CLIENT_ALIAS` and builds `VPN_CLIENT_DOMAIN = <alias>.<domain>`.
+# - **Why:** a wrong value must stop the notebook here, before any container changes.
+# - **How:** rejects any mode other than `local`/`vpn` and, in VPN mode, a host IP outside `10.15.20.*`, and an alias that is not lower-case letters, digits and inner hyphens.
 
 # %%
 NETWORK_MODE = NETWORK_MODE.strip().lower()
@@ -47,7 +58,11 @@ if (
 VPN_CLIENT_DOMAIN = f"{VPN_CLIENT_ALIAS}.{VPN_DOMAIN}"
 
 # %% [markdown]
-# Locates the labs-setup root by walking parent directories for a pyproject.toml alongside the cassandra and mongodb module folders, makes its `labs_runtime` helpers importable, then changes into the spark module directory.
+# ## 3. Find the module folder
+#
+# - **What:** locates the labs-setup root, changes into `spark/` and imports `run_command`.
+# - **Why:** relative paths (Compose file, `mount/`) then resolve the same way whether papermill or JupyterLab started the kernel; `run_command` passes an argument list to the program without a shell, so it behaves the same on Windows, macOS and Linux.
+# - **How:** walks up from the current folder to the first one holding `pyproject.toml`, `cassandra/` and `mongodb/`.
 
 # %%
 # Resolve module assets from the labs-setup root.
@@ -80,7 +95,12 @@ os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
 # %% [markdown]
-# Defines the Spark cluster naming and addressing: spark-master, three spark-worker containers, the spark-jupyter service with their Docker image tags, ports, per-mode compose/client hostnames via VPN_CLIENT_DOMAIN, and the shared-workspace path.
+# ## 4. Cluster names and ports
+#
+# - **What:** the master (`spark-master-internal`, port `6077`, UI `6080`), three workers (UIs `6081-6083`) and `spark-jupyter` (JupyterLab `6888`, Spark UI `4040`); images based on `apache/spark:4.1.2-scala2.13-java17-python3-ubuntu`.
+# - **Why:** the notebooks run inside `spark-jupyter`, which is the Spark Driver; the names are the same in Local and VPN mode inside the Docker network, while browsers reach the UIs at `127.0.0.1` or `<container>.<alias>.<domain>`.
+# - **How:** the token of JupyterLab is empty, which is acceptable only because it listens on `127.0.0.1` (Local) or the VPN address.
+# - 📄 [Spark 4.1.2 — Standalone mode](https://spark.apache.org/docs/4.1.2/spark-standalone.html) · [Spark — Web UI (port 4040)](https://spark.apache.org/docs/4.1.2/monitoring.html)
 
 # %%
 SPARK_START_FROM_SCRATCH = START_FROM_SCRATCH
@@ -147,7 +167,12 @@ SPARK_SHARED_WORKSPACE = "shared-workspace"
 SPARK_SHARED_WORKSPACE_DIR = f"/opt/spark/{SPARK_SHARED_WORKSPACE}"
 
 # %% [markdown]
-# Creates the local bind mount directory (DOCKER_MOUNTDIR) that backs the Spark containers' persistent volumes.
+# ## 5. Host folder
+#
+# - **What:** creates the module folder; `mount/` will hold the master's, workers' and JupyterLab's files.
+# - **Why:** work files and the packed Python environment live on the host.
+# - **How:** path built from `MODULE_DIR`.
+# - 📄 [Docker — Bind mounts](https://docs.docker.com/engine/storage/bind-mounts/)
 
 # %%
 import os
@@ -160,7 +185,11 @@ path = Path(LOCALHOST_WORKDIR)
 path.mkdir(parents=True, exist_ok=True)
 
 # %% [markdown]
-# Verifies the pinned SHA-256 of every tracked JAR in `jars/` before any image or container uses them. Spark 4.1.2 already ships its Hadoop, Parquet, Jackson, ANTLR and Scala runtime JARs; only connector JARs absent from that image are vendored here. Spark never downloads them.
+# ## 6. Check the bundled JARs
+#
+# - **What:** compares the SHA-256 of the eight JARs in `jars/` with pinned values: Iceberg 1.12.0, five Delta 4.3.1 JARs and two GraphFrames 0.12.3 JARs.
+# - **Why:** Spark never downloads packages at run time; a missing or altered JAR stops the build here instead of failing later in an Executor.
+# - **How:** `hashlib.sha256` over each file. Spark 4.1.2 already ships Hadoop, Parquet, Jackson, ANTLR and Scala; only connectors it lacks are bundled. GraphFrames' `datasketches-java` dependency is also already in Spark, so it is not added twice.
 
 # %%
 import hashlib
@@ -190,7 +219,12 @@ for jar_name, expected_sha256 in {**SPARK_COURSE_JARS, **SPARK_GRAPHFRAMES_JARS}
     print(f"OK {jar_name}")
 
 # %% [markdown]
-# # Stop spark-cluster.docker-compose.yml
+# ## 7. Stop the previous cluster
+#
+# - **What:** with `START_FROM_SCRATCH=True`, removes the containers, network attachments and volumes.
+# - **Why:** a fresh build must not reuse old state; with `False` the running cluster is kept.
+# - **How:** `docker compose -f spark-cluster.docker-compose.yml down -v` (`check=False`).
+# - 📄 [docker compose down](https://docs.docker.com/reference/cli/docker/compose/down/)
 
 # %%
 import subprocess
@@ -205,7 +239,12 @@ else:
 
 
 # %% [markdown]
-# Defines clear_bind_directory, which empties a bind mount through a throwaway busybox:1.36 container, and uses it to wipe the master, worker, and shared-workspace mounts when SPARK_START_FROM_SCRATCH is true.
+# ## 8. Delete the old state
+#
+# - **What:** with `START_FROM_SCRATCH=True`, empties the master's, workers' and shared folders under `mount/`.
+# - **Why:** files written by the containers belong to root and the host user cannot always delete them.
+# - **How:** `rm -rf` runs as root inside a throwaway `busybox:1.36` container that sees each folder as `/target`.
+# - 📄 [docker container run](https://docs.docker.com/reference/cli/docker/container/run/)
 
 # %%
 def clear_bind_directory(path):
@@ -234,7 +273,12 @@ if SPARK_START_FROM_SCRATCH :
     Path(os.path.join(DOCKER_MOUNTDIR, JUPYTER_LAB_NAME)).mkdir(parents=True, exist_ok=True)
 
 # %% [markdown]
-# ### Build spark-jupyter
+# ## 9. spark-jupyter Dockerfile
+#
+# - **What:** writes `dockerfile.spark-jupyter`: the Spark image plus JupyterLab, papermill, `graphframes-py` and the lab's libraries at exact versions.
+# - **Why:** the Driver and the Executors must use the same library versions, so the shared ones (`pandas`, `pyarrow`, `numpy`, `faker`) are pinned once and reused for the workers' environment.
+# - **How:** `pip install pyspark==4.1.2 jupyterlab==4.6.4 papermill==2.7.0 graphframes-py==0.12.3 ...`.
+# - 📄 [graphframes-py 0.12.3](https://pypi.org/project/graphframes-py/0.12.3/)
 
 # %%
 import os
@@ -292,13 +336,23 @@ print(
 display(Markdown(f"```dockerfile\n{dockerfile_spark_jupyter_contents}\n```"))
 
 # %% [markdown]
-# Builds the spark-jupyter image from dockerfile.spark-jupyter, tagging it as SPARK_JUPYTER_LAB_DOCKER_TAG.
+# ## 10. Build spark-jupyter
+#
+# - **What:** builds the image tagged `spark-jupyter:4.1.2-scala2.13-java17-python3-ubuntu`.
+# - **Why:** it is the base of the next image and the container where students run the notebooks.
+# - **How:** `docker build -t ... -f dockerfile.spark-jupyter .`.
+# - 📄 [docker buildx build](https://docs.docker.com/reference/cli/docker/buildx/build/)
 
 # %%
 run_command(["docker", "build", "-t", f"{SPARK_JUPYTER_LAB_DOCKER_TAG}", "-f", "dockerfile.spark-jupyter", "."], check=False)
 
 # %% [markdown]
-# ### Build spark-job-venv
+# ## 11. spark-job-venv Dockerfile
+#
+# - **What:** writes `dockerfile.spark-job-venv`: a virtual environment with the Executors' libraries, packed with `venv-pack`.
+# - **Why:** the workers run the plain Spark image, which lacks the lab's Python libraries; they get them from this archive instead of installing anything at run time.
+# - **How:** `python3 -m venv --copies` (copies the interpreter so the environment works once unpacked elsewhere), `pip install`, then `venv-pack -o spark_job_env.tar.gz`.
+# - 📄 [PySpark — Python package management (venv-pack)](https://spark.apache.org/docs/4.1.2/api/python/tutorial/python_packaging.html) · [venv-pack](https://jcristharif.com/venv-pack/)
 
 # %%
 import os
@@ -324,7 +378,12 @@ print(f"Successfully created: '{os.path.relpath(os.path.join(LOCALHOST_WORKDIR,d
 display(Markdown(f"```dockerfile\n{dockerfile_spark_job_venv_contents}\n```"))
 
 # %% [markdown]
-# Ensures the mount directory exists, then builds the spark-job-venv image, creates a throwaway container from it, copies the packed spark_job_env.tar.gz into the shared workspace, and removes the container.
+# ## 12. Build and extract the environment
+#
+# - **What:** builds `spark-job-venv`, copies `spark_job_env.tar.gz` into `mount/shared-workspace/` and removes the temporary container.
+# - **Why:** every worker unpacks that archive when it starts.
+# - **How:** `docker build`, `docker create`, `docker cp`, `docker rm`.
+# - 📄 [docker buildx build](https://docs.docker.com/reference/cli/docker/buildx/build/) · [docker container create](https://docs.docker.com/reference/cli/docker/container/create/) · [docker container cp](https://docs.docker.com/reference/cli/docker/container/cp/)
 
 # %%
 from pathlib import Path
@@ -337,7 +396,11 @@ run_command(["docker", "cp", f"spark-job-venv:{SPARK_JOB_VENV_BUILD_DIR}/spark_j
 run_command(["docker", "rm", "spark-job-venv"], check=False)
 
 # %% [markdown]
-# Stops if the Driver image (spark-jupyter) and the Workers' environment (spark-job-venv) have any shared Python package at different versions, so the Driver and the Executors always run the same library code.
+# ## 13. Driver and Executor library parity
+#
+# - **What:** compares the Python packages of `spark-jupyter` (Driver) and the packed environment (Executors).
+# - **Why:** the same code could give different results on each side if a shared package differs; the run stops in that case.
+# - **How:** `labs_parity.check_python_parity` lists both images' packages and raises `EnvironmentsDiffer` on any version difference.
 
 # %%
 from labs_parity import PythonEnvironment, check_python_parity
@@ -348,7 +411,12 @@ parity_report = check_python_parity(
 )
 
 # %% [markdown]
-# # Build Spark images and create spark-cluster.docker-compose.yml
+# ## 14. Write the Compose file
+#
+# - **What:** generates `spark-cluster.docker-compose.yml` with the master, `spark-jupyter` and three workers on the existing `hadoop-network`.
+# - **Why:** Spark reads and writes HDFS, so it joins Hadoop's network and reaches `namenode` by name.
+# - **How:** each worker unpacks the environment into `/opt/spark/executor-env` before starting, with `SPARK_WORKER_CORES=2` and `SPARK_WORKER_MEMORY=2048M`; the JARs are mounted read-only at `/opt/spark/course-jars`, and the GraphFrames JARs also in `/opt/spark/jars` (Spark's default classpath) of the Driver and the workers; `labs-setup` is mounted read-only in JupyterLab; JupyterLab runs with an empty token and XSRF checks off so the validation tools can drive it.
+# - 📄 [Spark 4.1.2 — Standalone mode](https://spark.apache.org/docs/4.1.2/spark-standalone.html) · [Jupyter Server — config options](https://jupyter-server.readthedocs.io/en/latest/other/full-config.html) · [Compose file — services](https://docs.docker.com/reference/compose-file/services/)
 
 # %%
 import os
@@ -546,13 +614,23 @@ print(f"Successfully created: '{os.path.relpath(spark_compose_yaml_path)}'")
 display(Markdown(f"```yaml\n{spark_compose_yaml_contents}\n```"))
 
 # %% [markdown]
-# Starts the full Spark cluster (spark-master, the three workers, and spark-jupyter) in detached mode with `docker compose up -d --wait`, blocking until every healthcheck passes.
+# ## 15. Start Spark
+#
+# - **What:** starts the master, JupyterLab and the workers and waits until every health check passes.
+# - **Why:** the lab notebooks need a master with registered workers and a JupyterLab that answers.
+# - **How:** `docker compose up -d --wait`; each health check runs `curl -f` against the service's web port.
+# - 📄 [docker compose up](https://docs.docker.com/reference/cli/docker/compose/up/)
 
 # %%
 run_command(["docker", "compose", "-f", "spark-cluster.docker-compose.yml", "up", "-d", "--wait"])
 
 # %% [markdown]
-# Checks that GraphFrames is ready in the running cluster: the Python package in `spark-jupyter` (the Driver) and both JARs on Spark's default classpath of the Driver and every Worker.
+# ## 16. GraphFrames check
+#
+# - **What:** checks `graphframes-py` 0.12.3 in `spark-jupyter` and both GraphFrames JARs in `/opt/spark/jars` of the Driver and every worker.
+# - **Why:** graph code fails only at run time if a piece is missing; this catches it now.
+# - **How:** `docker exec ... python3 -c "import graphframes"` and `test -f` for each JAR.
+# - 📄 [GraphFrames](https://graphframes.io/)
 
 # %%
 graphframes_version = run_command(

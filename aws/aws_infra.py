@@ -13,12 +13,16 @@
 # ---
 
 # %% [markdown]
-# # Setup
+# # AWS lab — local infrastructure (no AWS account, no cost)
 #
-# Local AWS environment for the AWS lab: no AWS account, no credentials, no cost.
-# Moto emulates S3, DynamoDB, IAM, STS and Lambda (running each function in a
-# real Lambda runtime container), and an Athena-compatible gateway runs Athena
-# queries on its own HiveServer2 engine, which reads the data from Moto's S3.
+# Moto emulates S3, DynamoDB, IAM, STS and Lambda (each function runs in a real Lambda runtime container), and an Athena-compatible gateway runs Athena queries on its own HiveServer2 engine, which reads the data from Moto's S3.
+#
+# ## 1. Parameters
+#
+# - **What:** default values for `NETWORK_MODE`, the VPN identity and `START_FROM_SCRATCH`.
+# - **Why:** the same notebook serves Local mode (ports on `127.0.0.1`) and VPN mode (`<container>.<alias>.<domain>`).
+# - **How:** the cell is tagged `parameters`; papermill inserts an `injected-parameters` cell right after it with the `-p` values.
+# - 📄 [papermill — Parameterize](https://papermill.readthedocs.io/en/latest/usage-parameterize.html)
 
 # %% tags=["parameters"]
 # Local mode is the portable default; VPN mode publishes services on this host.
@@ -30,7 +34,11 @@ VPN_CLIENT_ALIAS = "mavasbel"
 START_FROM_SCRATCH = False
 
 # %% [markdown]
-# Validates the papermill-injected NETWORK_MODE and VPN_CLIENT_ALIAS values and derives VPN_CLIENT_DOMAIN as `<alias>.<VPN_DOMAIN>` for later VPN-mode host naming.
+# ## 2. Validate the parameters
+#
+# - **What:** lower-cases `NETWORK_MODE` and `VPN_CLIENT_ALIAS` and builds `VPN_CLIENT_DOMAIN = <alias>.<domain>`.
+# - **Why:** a wrong value must stop the notebook here, before any container changes.
+# - **How:** rejects any mode other than `local`/`vpn` and, in VPN mode, a host IP outside `10.15.20.*`, and an alias that is not lower-case letters, digits and inner hyphens.
 
 # %%
 import re
@@ -51,7 +59,11 @@ if re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", VPN_CLIENT_ALIAS) is None:
 VPN_CLIENT_DOMAIN = f"{VPN_CLIENT_ALIAS}.{VPN_DOMAIN}"
 
 # %% [markdown]
-# Locates the labs-setup root by walking parent directories for a pyproject.toml alongside the cassandra and mongodb module folders, makes its `labs_runtime` helpers importable, then changes into the aws module directory.
+# ## 3. Find the module folder
+#
+# - **What:** locates the labs-setup root, changes into `aws/` and imports `run_command`.
+# - **Why:** relative paths (Compose file, `mount/`) then resolve the same way whether papermill or JupyterLab started the kernel; `run_command` passes an argument list to the program without a shell, so it behaves the same on Windows, macOS and Linux.
+# - **How:** walks up from the current folder to the first one holding `pyproject.toml`, `cassandra/` and `mongodb/`.
 
 # %%
 import os
@@ -81,7 +93,12 @@ os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
 # %% [markdown]
-# Declares the services: Moto (S3, DynamoDB, IAM with AWS managed policies loaded, STS, Lambda) on host port 5050, the Athena gateway on 5051, the internal HiveServer2 engine, and `aws-terminal`, the student's terminal (AWS CLI v2 and the lab's Python libraries) already pointed at both. Images are pinned; the Lambda runtime image is pinned by digest because its tag is rebuilt upstream. Credentials are dummy values: nothing here can reach a real AWS account.
+# ## 4. Services and endpoints
+#
+# - **What:** names, pinned images and ports: Moto `5.2.4` on host port `5050`, the Athena gateway on `5051`, the internal `apache/hive:4.0.1` engine and `aws-terminal`, the student's terminal; region `us-east-1`, keys `test`/`test`.
+# - **Why:** nothing here can reach a real AWS account: the keys are dummies and Moto always answers as account `123456789012`.
+# - **How:** clients use `127.0.0.1` (Local) or `<container>.<alias>.<domain>` (VPN); the Lambda runtime image is pinned by digest because its tag is rebuilt upstream.
+# - 📄 [Moto 5.2.4 — Server mode](https://docs.getmoto.org/en/5.2.4/docs/server_mode.html)
 
 # %%
 AWS_START_FROM_SCRATCH = START_FROM_SCRATCH
@@ -132,7 +149,12 @@ ATHENA_INTERNAL_URL = f"http://{ATHENA_GATEWAY_CONTAINER_NAME}:{ATHENA_GATEWAY_I
 print(f"Moto: {MOTO_CLIENT_URL} | Athena: {ATHENA_CLIENT_URL}")
 
 # %% [markdown]
-# Creates the bind mount directory that holds the engine's S3 configuration, the client configuration files, and `mount/workspace`, the folder the student edits on the host and sees as `/workspace` in `aws-terminal`.
+# ## 5. Host folders
+#
+# - **What:** creates `mount/`; `mount/workspace` will be the student's `/workspace` in `aws-terminal`.
+# - **Why:** the engine configuration, the client files and the student's files live on the host.
+# - **How:** paths built from `MODULE_DIR`.
+# - 📄 [Docker — Bind mounts](https://docs.docker.com/engine/storage/bind-mounts/)
 
 # %%
 LOCALHOST_WORKDIR = str(MODULE_DIR.resolve())
@@ -141,7 +163,12 @@ Path(DOCKER_MOUNTDIR).mkdir(parents=True, exist_ok=True)
 AWS_TERMINAL_HOST_DIR = Path(DOCKER_MOUNTDIR) / "workspace"
 
 # %% [markdown]
-# # Stop aws-cluster.docker-compose.yml
+# ## 6. Stop the previous stack
+#
+# - **What:** with `START_FROM_SCRATCH=True`, removes the containers, network and volumes.
+# - **Why:** a fresh build must not reuse old state; with `False` the running stack is kept.
+# - **How:** `docker compose -f aws-cluster.docker-compose.yml down -v` (`check=False`).
+# - 📄 [docker compose down](https://docs.docker.com/reference/cli/docker/compose/down/)
 
 # %%
 import subprocess
@@ -156,7 +183,12 @@ else:
 
 
 # %% [markdown]
-# Defines clear_bind_directory, which empties the bind mount through a throwaway busybox:1.36 container, and runs it on DOCKER_MOUNTDIR when AWS_START_FROM_SCRATCH is true.
+# ## 7. Delete the old state
+#
+# - **What:** with `START_FROM_SCRATCH=True`, empties `mount/`.
+# - **Why:** files written by containers may not be deletable by the host user.
+# - **How:** `rm -rf` runs as root inside a throwaway `busybox:1.36` container that sees `mount/` as `/target`.
+# - 📄 [docker container run](https://docs.docker.com/reference/cli/docker/container/run/)
 
 # %%
 def clear_bind_directory(path):
@@ -177,7 +209,12 @@ if AWS_START_FROM_SCRATCH:
     clear_bind_directory(DOCKER_MOUNTDIR)
 
 # %% [markdown]
-# Writes the engine's core-site.xml: the `s3://` scheme Athena uses is served by Hadoop's S3A connector pointed at Moto (path-style addressing, no TLS). The connector ships inside the Hive image and is enabled with HADOOP_OPTIONAL_TOOLS=hadoop-aws; nothing is downloaded.
+# ## 8. Engine S3 configuration
+#
+# - **What:** writes `core-site.xml` for the Athena engine.
+# - **Why:** Athena tables live at `s3://` paths; the engine must read them from Moto, not from AWS.
+# - **How:** the `s3://` scheme is served by Hadoop's S3A connector pointed at `http://motoserver:5000`, path-style, without TLS, with the dummy keys. The connector ships inside the Hive image (enabled later with `HADOOP_OPTIONAL_TOOLS=hadoop-aws`); nothing is downloaded.
+# - 📄 [Hadoop 3.3.6 — S3A connector](https://hadoop.apache.org/docs/r3.3.6/hadoop-aws/tools/hadoop-aws/index.html)
 
 # %%
 ENGINE_CONF_DIR = Path(DOCKER_MOUNTDIR) / ATHENA_ENGINE_CONTAINER_NAME
@@ -200,7 +237,12 @@ ENGINE_CONF_DIR.mkdir(parents=True, exist_ok=True)
 print(f"Wrote {ENGINE_CONF_DIR / 'core-site.xml'}")
 
 # %% [markdown]
-# Writes the client configuration: an AWS config and credentials file with dummy keys, plus `aws-lab.env` (Bash) and `aws-lab.ps1` (PowerShell) that point the AWS CLI and boto3 at these files and at the local endpoints. Pointing AWS_CONFIG_FILE and AWS_SHARED_CREDENTIALS_FILE at these files keeps any real `~/.aws` profile out of the lab.
+# ## 9. Client configuration
+#
+# - **What:** writes `mount/client/config`, `credentials` and the scripts `aws-lab.env` (Bash) and `aws-lab.ps1` (PowerShell).
+# - **Why:** a host-side AWS CLI or boto3 must use the lab endpoints and never a real `~/.aws` profile.
+# - **How:** the scripts unset any real keys, point `AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE` at these files, and set `AWS_ENDPOINT_URL` (Moto) and `AWS_ENDPOINT_URL_ATHENA` (the gateway).
+# - 📄 [AWS CLI — Config and credentials files](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html) · [AWS CLI — Environment variables](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html) · [AWS SDKs — Service-specific endpoints](https://docs.aws.amazon.com/sdkref/latest/guide/feature-ss-endpoints.html) · [Endpoint variable per service](https://docs.aws.amazon.com/sdkref/latest/guide/ss-endpoints-table.html)
 
 # %%
 CLIENT_DIR = Path(DOCKER_MOUNTDIR) / "client"
@@ -237,7 +279,12 @@ UNSET = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")
 print((CLIENT_DIR / "aws-lab.env").read_text(encoding="utf-8"))
 
 # %% [markdown]
-# Pulls the pinned Lambda runtime image now, so that the first `aws lambda invoke` does not stall on a download.
+# ## 10. Pull the Lambda runtime
+#
+# - **What:** downloads the pinned Lambda runtime image now.
+# - **Why:** the first `aws lambda invoke` would otherwise wait for this download.
+# - **How:** `docker pull -q <image>@sha256:...`.
+# - 📄 [docker image pull](https://docs.docker.com/reference/cli/docker/image/pull/) · [Moto — Lambda (Docker options)](https://docs.getmoto.org/en/5.2.4/docs/services/lambda.html)
 
 # %%
 pull = subprocess.run(["docker", "pull", "-q", LAMBDA_RUNTIME_IMAGE], capture_output=True, text=True, encoding="utf-8")
@@ -245,7 +292,12 @@ print(pull.stdout.strip())
 assert pull.returncode == 0, pull.stderr
 
 # %% [markdown]
-# # Start aws-cluster.docker-compose.yml
+# ## 11. Write the Compose file
+#
+# - **What:** generates `aws-cluster.docker-compose.yml` with `motoserver`, `athena-engine`, `athena-gateway` and `aws-terminal` on `aws-network`.
+# - **Why:** each Lambda invocation runs as a sibling container that must reach Moto; a dotted VPN host name must not be read as `<bucket>.<endpoint>`.
+# - **How:** Moto gets the Docker socket, `MOTO_DOCKER_NETWORK_NAME`, `MOTO_DOCKER_LAMBDA_IMAGE`, `MOTO_IAM_LOAD_MANAGED_POLICIES=true` (AWS managed policies such as `AmazonDynamoDBFullAccess` exist) and `MOTO_S3_CUSTOM_ENDPOINTS`; the engine runs `SERVICE_NAME=hiveserver2`; the terminal runs as the host user on Linux and macOS so its files stay editable. Start order follows the health checks.
+# - 📄 [Moto — Lambda (Docker options)](https://docs.getmoto.org/en/5.2.4/docs/services/lambda.html) · [Moto 5.2.4 — settings.py (`MOTO_IAM_LOAD_MANAGED_POLICIES`)](https://raw.githubusercontent.com/getmoto/moto/5.2.4/moto/settings.py) · [Moto — S3 custom endpoints](https://docs.getmoto.org/en/5.2.4/docs/services/s3.html) · [Hive — Docker quickstart](https://hive.apache.org/development/quickstart/) · [Compose file — services](https://docs.docker.com/reference/compose-file/services/)
 
 # %%
 import yaml
@@ -373,7 +425,12 @@ print(f"Successfully created: '{os.path.relpath(aws_compose_yaml_path)}'")
 display(Markdown(f"```yaml\n{aws_compose_yaml_contents}\n```"))
 
 # %% [markdown]
-# Builds the Athena gateway image (`aws/dockerfile.athena-gateway`) and the student terminal (`aws/dockerfile.aws-terminal`: the signature-verified, checksum-pinned AWS CLI v2 installer plus exact versions from labs-setup's uv.lock). The workspace folder is created here, before Compose could create it as root.
+# ## 12. Build the gateway and the terminal
+#
+# - **What:** builds `labs-athena-gateway:1` and `labs-aws-terminal:1`.
+# - **Why:** the terminal brings AWS CLI v2 and the lab's Python libraries; the student needs nothing installed on the host.
+# - **How:** `docker compose build`; the terminal image checks the AWS CLI 2.36.17 installer against a pinned SHA-256 (taken from installers whose PGP signature was verified) and installs the exact versions in `uv.lock`. `mount/workspace` is created first so Docker does not create it as root.
+# - 📄 [Compose — build](https://docs.docker.com/reference/compose-file/build/) · [AWS CLI — Install (PGP signature)](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
 
 # %%
 AWS_TERMINAL_HOST_DIR.mkdir(parents=True, exist_ok=True)
@@ -381,13 +438,23 @@ run_command(["docker", "compose", "-f", "aws-cluster.docker-compose.yml", "build
              ATHENA_GATEWAY_CONTAINER_NAME, AWS_TERMINAL_CONTAINER_NAME])
 
 # %% [markdown]
-# Starts the stack in detached mode with `--wait`: Moto, then the engine (beeline `SELECT 1`), then the gateway (`/health`) must pass their healthchecks.
+# ## 13. Start the stack
+#
+# - **What:** starts the four services and waits until each health check passes.
+# - **Why:** the lab needs every endpoint answering.
+# - **How:** `docker compose up -d --wait`: Moto (`/moto-api/`), then the engine (`beeline ... SELECT 1`), then the gateway (`/health`), then the terminal (`aws sts get-caller-identity`).
+# - 📄 [docker compose up](https://docs.docker.com/reference/cli/docker/compose/up/)
 
 # %%
 run_command(["docker", "compose", "-f", "aws-cluster.docker-compose.yml", "up", "-d", "--wait"])
 
 # %% [markdown]
-# Smoke test through the same endpoints the students use: STS answers with Moto's fixed account (never a real one); a Lambda function writes to DynamoDB from its own runtime container; and an Athena table over an S3 object returns its row count. Everything it creates is deleted.
+# ## 14. Smoke test
+#
+# - **What:** exercises the stack through the students' endpoints and deletes everything it creates.
+# - **Why:** it proves the account is Moto's, that a Lambda can write to DynamoDB from its own container, and that Athena reads S3.
+# - **How:** STS must return account `123456789012`; a role with `AmazonDynamoDBFullAccess` runs a Lambda that writes one item; an Athena external table over a two-row CSV in S3 must return `2` and `4.0`; finally `aws-terminal` must also see account `123456789012`.
+# - 📄 [STS GetCallerIdentity](https://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html) · [Lambda execution role](https://docs.aws.amazon.com/lambda/latest/dg/lambda-intro-execution-role.html) · [Athena StartQueryExecution](https://docs.aws.amazon.com/athena/latest/APIReference/API_StartQueryExecution.html)
 
 # %%
 import io

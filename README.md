@@ -480,8 +480,8 @@ uv run papermill opensearch/opensearch_lab.ipynb opensearch/opensearch_lab.execu
 uv run papermill hadoop/hadoop_infra.ipynb hadoop/hadoop_infra.executed.ipynb -p NETWORK_MODE local -p START_FROM_SCRATCH True
 uv run papermill hadoop/hadoop_lab.ipynb hadoop/hadoop_lab.executed.ipynb -p NETWORK_MODE local
 
-uv run papermill hadoop/hive_infra.ipynb hadoop/hive_infra.executed.ipynb -p NETWORK_MODE local -p START_FROM_SCRATCH True
-uv run papermill hadoop/hive_lab.ipynb hadoop/hive_lab.executed.ipynb -p NETWORK_MODE local
+uv run papermill hive/hive_infra.ipynb hive/hive_infra.executed.ipynb -p NETWORK_MODE local -p START_FROM_SCRATCH True
+uv run papermill hive/hive_lab.ipynb hive/hive_lab.executed.ipynb -p NETWORK_MODE local
 
 uv run papermill spark/spark_infra.ipynb spark/spark_infra.executed.ipynb -p NETWORK_MODE local -p START_FROM_SCRATCH True
 uv run papermill spark/spark_lab.ipynb spark/spark_lab.executed.ipynb -p NETWORK_MODE local
@@ -509,8 +509,8 @@ uv run papermill opensearch/opensearch_lab.ipynb opensearch/opensearch_lab.execu
 uv run papermill hadoop/hadoop_infra.ipynb hadoop/hadoop_infra.executed.ipynb -p NETWORK_MODE vpn -p VPN_HOST_IP 10.15.20.100 -p VPN_CLIENT_ALIAS mavasbel -p VPN_DOMAIN vpn.itam.mx -p START_FROM_SCRATCH True
 uv run papermill hadoop/hadoop_lab.ipynb hadoop/hadoop_lab.executed.ipynb -p NETWORK_MODE vpn -p VPN_HOST_IP 10.15.20.100 -p VPN_CLIENT_ALIAS mavasbel -p VPN_DOMAIN vpn.itam.mx
 
-uv run papermill hadoop/hive_infra.ipynb hadoop/hive_infra.executed.ipynb -p NETWORK_MODE vpn -p VPN_HOST_IP 10.15.20.100 -p VPN_CLIENT_ALIAS mavasbel -p VPN_DOMAIN vpn.itam.mx -p START_FROM_SCRATCH True
-uv run papermill hadoop/hive_lab.ipynb hadoop/hive_lab.executed.ipynb -p NETWORK_MODE vpn -p VPN_HOST_IP 10.15.20.100 -p VPN_CLIENT_ALIAS mavasbel -p VPN_DOMAIN vpn.itam.mx
+uv run papermill hive/hive_infra.ipynb hive/hive_infra.executed.ipynb -p NETWORK_MODE vpn -p VPN_HOST_IP 10.15.20.100 -p VPN_CLIENT_ALIAS mavasbel -p VPN_DOMAIN vpn.itam.mx -p START_FROM_SCRATCH True
+uv run papermill hive/hive_lab.ipynb hive/hive_lab.executed.ipynb -p NETWORK_MODE vpn -p VPN_HOST_IP 10.15.20.100 -p VPN_CLIENT_ALIAS mavasbel -p VPN_DOMAIN vpn.itam.mx
 
 uv run papermill spark/spark_infra.ipynb spark/spark_infra.executed.ipynb -p NETWORK_MODE vpn -p VPN_HOST_IP 10.15.20.100 -p VPN_CLIENT_ALIAS mavasbel -p VPN_DOMAIN vpn.itam.mx -p START_FROM_SCRATCH True
 uv run papermill spark/spark_lab.ipynb spark/spark_lab.executed.ipynb -p NETWORK_MODE vpn -p VPN_HOST_IP 10.15.20.100 -p VPN_CLIENT_ALIAS mavasbel -p VPN_DOMAIN vpn.itam.mx
@@ -600,7 +600,9 @@ The lab walks a full **MapReduce** job: upload to HDFS, inspect block replicatio
 
 ### Hive
 
-Hive 4.0.1 with a PostgreSQL 18 metastore, running on **Tez** — the infra notebook loads the Tez distribution into HDFS.
+Hive 4.0.1 with a PostgreSQL 18 metastore, running on **Tez** — the infra notebook packs the Tez libraries of the `apache/hive:4.0.1` image into HDFS.
+
+The module lives in `hive/`, separate from `hadoop/`. Its compose project `hive-cluster` joins the Hadoop module's Docker network `hadoop-network`, so `hadoop/hadoop_infra.ipynb` must have run and be healthy first.
 
 | Component | Hostname | Port |
 |---|---|---|
@@ -612,7 +614,8 @@ Hive 4.0.1 with a PostgreSQL 18 metastore, running on **Tez** — the infra note
 - Postgres: `hive` / `hive`, db `metastore`
 - No one-shot schema container: `hive-metastore` creates its schema in PostgreSQL on first start and checks it on every later start (`schematool -initOrUpgradeSchema`); HiveServer2 never touches the schema.
 - `hive-server2` is also the students' terminal: `docker exec -it -u hive -w /tmp/hive-lab hive-server2 bash` opens a shell with the Hive (Beeline) and HDFS clients, in the working folder `/tmp/hive-lab` (HiveServer2's own log and scratch files stay in `/tmp/hive`). Its limits are 1792 MB and 2 CPUs so HiveServer2 and the clients a student runs next to it fit together: over the full Hive lab walkthrough its non-reclaimable memory peaked at 62% of the limit, and at 72% with an idle Beeline session, a `GROUP BY` over 2,000,000 rows and a 50 MB `hdfs dfs -put` running at once (measured 2026-10-20).
-- Bundled: `apache-tez-0.10.2-bin.tar.gz` (loaded to HDFS) · `postgresql-42.7.10.jar`
+- Bundled: `postgresql-42.7.10.jar`, mounted into `hive-metastore` and `hive-server2`.
+- Tez: the infra notebook copies `/opt/tez` from `hive-server2`, adds Hive's `commons-collections` and `commons-lang` JARs, and uploads the result to HDFS as `/apps/dist-lib/dist-lib.tar.gz` (the `tez.lib.uris` of `tez-site.xml`). `hive/apache-tez-0.10.2-bin.tar.gz` is kept in the folder, but no notebook reads it.
 
 ```mermaid
 flowchart LR
@@ -818,6 +821,7 @@ docker compose -f <name>.docker-compose.yml down -v
 - The 19 `py:percent` `.py` sources are canonical. Force source-to-notebook refreshes with `uv run jupytext --to ipynb --update <source.py>`; do not use bidirectional `--sync` for this refresh.
 - Each notebook has exactly one papermill `parameters` cell. Run every infrastructure/lab pair completely in both Local and VPN modes before declaring acceptance; Hive and Spark also require healthy Hadoop infrastructure.
 - Constants live at the top of each notebook; compose files are generated, not committed.
-- Structural audit and tests: `uv run python -m labs_audit` checks every notebook pair (one `parameters` cell with the documented defaults, the `non-relational-dbs-labs` kernel, no saved outputs, `.ipynb` identical to its `.py`, no IPython `!` shell lines, text I/O with explicit `encoding=` and, on writes, `newline=`, no `shell=True`, no Windows-only paths) and the six Spark JAR checksums. Notebooks run commands with `labs_runtime.run_command([...])`, an argument list that reaches the program unchanged on every operating system. `uv run pytest` runs `tests/{unit,component,e2e}` with 100 % branch coverage of `labs_audit`, `athena_gateway`, `labs_runtime` and `labs_parity` (the e2e tier also runs `python -m athena_gateway` as a process, measured through coverage's subprocess patch); `LABS_LIVE=1 uv run pytest tests/live` also executes every infrastructure/lab pair in Local mode with papermill.
+- Every code cell is explained by the markdown cell right before it: a numbered `## ` heading, then **What** (what the cell does), **Why** (why the step is needed) and **How** (the mechanism, with exact names and values), and optionally `📄` links to official documentation whose page states the fact cited.
+- Structural audit and tests: `uv run python -m labs_audit` checks every notebook pair (one `parameters` cell with the documented defaults, the `non-relational-dbs-labs` kernel, no saved outputs, `.ipynb` identical to its `.py`, no IPython `!` shell lines, text I/O with explicit `encoding=` and, on writes, `newline=`, no `shell=True`, no Windows-only paths, every code cell preceded by a markdown cell with a `## ` heading and **What / Why / How** bullets, every markdown link an `https://` URL) and the eight Spark JAR checksums. Notebooks run commands with `labs_runtime.run_command([...])`, an argument list that reaches the program unchanged on every operating system. `uv run pytest` runs `tests/{unit,component,e2e}` with 100 % branch coverage of `labs_audit`, `athena_gateway`, `labs_runtime` and `labs_parity` (the e2e tier also runs `python -m athena_gateway` as a process, measured through coverage's subprocess patch); `LABS_LIVE=1 uv run pytest tests/live` also executes every infrastructure/lab pair in Local mode with papermill, and `LABS_LINKS=1 uv run pytest tests/live/test_notebook_links.py` checks that every notebook link answers HTTP 200.
 - Credentials are course-local defaults (documented above) — not for production use.
 - Student homework notebooks are intentionally **not** in this repository (they live in the course's internal grading repo).

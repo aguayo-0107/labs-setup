@@ -163,3 +163,44 @@ def test_jar_checksums():
     details = {f.path: f.detail for f in rules.jar_checksums(bad)}
     assert details["spark/jars/delta-storage-4.3.1.jar"] == "missing"
     assert details["spark/jars/delta-kernel-api-4.3.1.jar"].startswith("sha256 000")
+
+
+def md(source):
+    return Cell("markdown", source)
+
+
+DOC = "## 3. Step\n\n- **What:** w.\n- **Why:** y.\n- **How:** h.\n- 📄 [Ref](https://example.org/a)"
+
+
+class TestDocumentedCells:
+    def test_documented_code_cell_passes(self):
+        assert rules.documented_cells(nb(md(DOC), code("x = 1"), md("free text"))) == []
+
+    def test_code_cell_without_markdown_before_it(self):
+        found = rules.documented_cells(nb(code("x = 1"), md(DOC), code("y = 2"), code("z = 3")))
+        assert [f.detail for f in found] == [
+            "cell 0 has no markdown cell before it",
+            "cell 3 has no markdown cell before it",
+        ]
+
+    def test_missing_labels_are_listed(self):
+        found = rules.documented_cells(nb(md("Some text\n- **What:** w."), code("x = 1")))
+        assert [f.detail for f in found] == ["cell 0 lacks ## , - **Why:**, - **How:**"]
+
+
+def test_markdown_links_and_https_rule():
+    notebook = nb(
+        md("See [A](https://a.example/x) and [B](http://b.example/y)."),
+        code("# [C](ftp://not-markdown)"),
+        md("[D](relative/path.md) [E](https://e.example/)"),
+    )
+    assert rules.markdown_links(notebook) == (
+        "https://a.example/x",
+        "http://b.example/y",
+        "relative/path.md",
+        "https://e.example/",
+    )
+    assert [f.detail for f in rules.https_links(notebook)] == [
+        "link 'http://b.example/y' is not an https:// URL",
+        "link 'relative/path.md' is not an https:// URL",
+    ]

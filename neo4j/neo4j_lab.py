@@ -13,7 +13,14 @@
 # ---
 
 # %% [markdown]
-# # Setup
+# # Neo4j lab — Cypher from Python
+#
+# ## 1. Parameters
+#
+# - **What:** default values for `NETWORK_MODE`, the VPN identity.
+# - **Why:** the same notebook serves Local mode (ports on `127.0.0.1`) and VPN mode (`<container>.<alias>.<domain>`).
+# - **How:** the cell is tagged `parameters`; papermill inserts an `injected-parameters` cell right after it with the `-p` values.
+# - 📄 [papermill — Parameterize](https://papermill.readthedocs.io/en/latest/usage-parameterize.html)
 
 # %% tags=["parameters"]
 # Local mode is the portable default; VPN mode publishes services on this host.
@@ -24,7 +31,11 @@ VPN_DOMAIN = "vpn.itam.mx"
 VPN_CLIENT_ALIAS = "mavasbel"
 
 # %% [markdown]
-# Validates the papermill-injected NETWORK_MODE and VPN_CLIENT_ALIAS values, accepting only lowercase local or vpn mode, and derives the student's VPN_CLIENT_DOMAIN for VPN addressing.
+# ## 2. Validate the parameters
+#
+# - **What:** lower-cases `NETWORK_MODE` and `VPN_CLIENT_ALIAS` and builds `VPN_CLIENT_DOMAIN = <alias>.<domain>`.
+# - **Why:** a wrong value must stop the notebook here, before any container changes.
+# - **How:** rejects any mode other than `local`/`vpn` and, in VPN mode, a host IP outside `10.15.20.*`, and an alias that is not lower-case letters, digits and inner hyphens.
 
 # %%
 import re
@@ -45,7 +56,11 @@ if re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", VPN_CLIENT_ALIAS) is None:
 VPN_CLIENT_DOMAIN = f"{VPN_CLIENT_ALIAS}.{VPN_DOMAIN}"
 
 # %% [markdown]
-# Locates the labs-setup project root by walking up from the current directory until a pyproject.toml with the cassandra and mongodb module directories is found, then changes into the neo4j module directory.
+# ## 3. Find the module folder
+#
+# - **What:** locates the labs-setup root, changes into `neo4j/` and imports `run_command`.
+# - **Why:** relative paths (Compose file, `mount/`) then resolve the same way whether papermill or JupyterLab started the kernel; `run_command` passes an argument list to the program without a shell, so it behaves the same on Windows, macOS and Linux.
+# - **How:** walks up from the current folder to the first one holding `pyproject.toml`, `cassandra/` and `mongodb/`.
 
 # %%
 # Resolve module assets from the labs-setup root.
@@ -72,7 +87,11 @@ os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
 # %% [markdown]
-# Defines the Neo4j Bolt port 7687 and HTTP UI port 7474 plus the initial neo4j credentials used later to open the driver session.
+# ## 4. Connection constants
+#
+# - **What:** the Bolt port `7687`, the browser port `7474` and the user `neo4j` / password `password`.
+# - **Why:** they must match what `neo4j_infra` configured.
+# - **How:** plain constants; the host is chosen in section 6.
 
 # %%
 # NEO4J_WORKDIR = "/var/lib/neo4j"
@@ -83,7 +102,11 @@ NEO4J_INIT_USER = "neo4j"
 NEO4J_INIT_PASSWORD = "password"
 
 # %% [markdown]
-# Creates the mount subdirectory in the current working directory to hold any bind-mounted container state.
+# ## 5. Paths
+#
+# - **What:** defines and creates `mount/` relative to the module folder.
+# - **Why:** kept for symmetry with the infrastructure notebook; the lab does not write there.
+# - **How:** `os.path.join` and `Path.mkdir(exist_ok=True)`.
 
 # %%
 import os
@@ -96,7 +119,12 @@ mount_path = Path(DOCKER_MOUNTDIR)
 mount_path.mkdir(parents=True, exist_ok=True)
 
 # %% [markdown]
-# ### Create session
+# ## 6. Connect
+#
+# - **What:** creates a driver for `bolt://<host>:7687`, checks the server answers and opens a session.
+# - **Why:** every later cell sends Cypher through this session.
+# - **How:** the host is `127.0.0.1` (Local) or `neo4j-instance.<alias>.<domain>` (VPN); `verify_connectivity()` fails fast if the server or the password is wrong.
+# - 📄 [Neo4j Python driver 6.2 — API](https://neo4j.com/docs/api/python-driver/6.2/api.html)
 
 # %%
 from neo4j import GraphDatabase
@@ -120,7 +148,12 @@ driver.verify_connectivity()
 session = driver.session()
 
 # %% [markdown]
-# ### Insert nodes
+# ## 7. Fake data generator
+#
+# - **What:** creates a `Faker` instance.
+# - **Why:** realistic names, jobs and cities without real personal data.
+# - **How:** `fake.unique.first_name()` never repeats a name within the run.
+# - 📄 [Faker](https://faker.readthedocs.io/en/master/)
 
 # %%
 from faker import Faker
@@ -128,7 +161,12 @@ from faker import Faker
 fake = Faker()
 
 # %% [markdown]
-# Generates 10 fake people with Faker and inserts them as :Person nodes via a Cypher UNWIND/MERGE transaction, then asserts the stored node count matches total_persons.
+# ## 8. Create the people
+#
+# - **What:** inserts 10 `:Person` nodes in one transaction and checks there are exactly 10.
+# - **Why:** sending the whole list as one parameter is one round trip instead of ten.
+# - **How:** `UNWIND $batch AS user` turns the list into rows; `MERGE` on `id` creates a node only if none has that id; `date(...)` stores `joined` as a Cypher date. The `with begin_transaction()` block commits at the end, or rolls back on an error.
+# - 📄 [UNWIND](https://neo4j.com/docs/cypher-manual/current/clauses/unwind/) · [MERGE](https://neo4j.com/docs/cypher-manual/current/clauses/merge/) · [Cypher — Parameters](https://neo4j.com/docs/cypher-manual/current/syntax/parameters/) · [Temporal values](https://neo4j.com/docs/cypher-manual/current/values-and-types/temporal/) · [Neo4j Python driver 6.2 — API](https://neo4j.com/docs/api/python-driver/6.2/api.html)
 
 # %%
 total_persons = 10
@@ -162,7 +200,12 @@ person_count = session.run("MATCH (p:Person) RETURN count(p) AS total").single()
 assert person_count == total_persons, person_count
 
 # %% [markdown]
-# ### Insert relationships
+# ## 9. Create the friendships and check the plugins
+#
+# - **What:** links up to 14 random pairs with a `:knows` relationship in each direction, then checks APOC and Graph Data Science answer.
+# - **Why:** Neo4j relationships always have a direction, so a mutual friendship is two relationships, each with its own `strength`.
+# - **How:** pairs are sorted and kept in a set, so duplicates collapse; `MATCH` finds both nodes and `MERGE` creates each direction once; the count must be twice the number of pairs. `apoc.version()` and `gds.version()` prove the plugins loaded.
+# - 📄 [MERGE](https://neo4j.com/docs/cypher-manual/current/clauses/merge/) · [APOC](https://neo4j.com/docs/apoc/current/) · [Graph Data Science](https://neo4j.com/docs/graph-data-science/current/)
 
 # %%
 import random
@@ -218,7 +261,12 @@ assert apoc_version and gds_version
 print(f"APOC {apoc_version}; GDS {gds_version}")
 
 # %% [markdown]
-# ### Delete nodes
+# ## 10. Delete and close
+#
+# - **What:** deletes every `:Person` with its relationships, checks none remain and closes the session and driver.
+# - **Why:** a node that still has relationships cannot be deleted with plain `DELETE`.
+# - **How:** `MATCH (p:Person) DETACH DELETE p`.
+# - 📄 [DELETE](https://neo4j.com/docs/cypher-manual/current/clauses/delete/)
 
 # %%
 with session.begin_transaction() as transaction:

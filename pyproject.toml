@@ -57,7 +57,7 @@ addopts = ["-q", "--strict-markers", "--strict-config", "--cov", "--cov-report=t
 markers = [
     "unit: pure rules and adapters on synthetic data",
     "component: the audit applied to the real notebooks of this repository",
-    "live: execute infra/lab notebooks with papermill against Docker (opt-in: LABS_LIVE=1)",
+    "live: execute infra/lab notebooks with papermill against Docker (opt-in: LABS_LIVE=1) and check every notebook link answers HTTP 200 (opt-in: LABS_LINKS=1)",
     "e2e: the command-line audit end to end, including a negative control",
 ]
 

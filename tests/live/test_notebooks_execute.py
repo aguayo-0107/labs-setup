@@ -27,7 +27,7 @@ SEQUENCE = (
     ("neo4j", ("neo4j/neo4j_infra",), "neo4j/neo4j_lab"),
     ("opensearch", ("opensearch/opensearch_infra",), "opensearch/opensearch_lab"),
     ("hadoop", ("hadoop/hadoop_infra",), "hadoop/hadoop_lab"),
-    ("hive", ("hadoop/hive_infra",), "hadoop/hive_lab"),
+    ("hive", ("hive/hive_infra",), "hive/hive_lab"),
     ("spark", ("spark/spark_infra",), "spark/spark_lab"),
     ("aws", ("aws/aws_infra",), "aws/aws_lab"),
 )

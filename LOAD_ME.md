@@ -42,8 +42,8 @@ uv run papermill opensearch/opensearch_lab.ipynb opensearch/opensearch_lab.execu
 
 uv run papermill hadoop/hadoop_infra.ipynb hadoop/hadoop_infra.executed.ipynb -p NETWORK_MODE local -p START_FROM_SCRATCH True
 uv run papermill hadoop/hadoop_lab.ipynb hadoop/hadoop_lab.executed.ipynb -p NETWORK_MODE local
-uv run papermill hadoop/hive_infra.ipynb hadoop/hive_infra.executed.ipynb -p NETWORK_MODE local -p START_FROM_SCRATCH True
-uv run papermill hadoop/hive_lab.ipynb hadoop/hive_lab.executed.ipynb -p NETWORK_MODE local
+uv run papermill hive/hive_infra.ipynb hive/hive_infra.executed.ipynb -p NETWORK_MODE local -p START_FROM_SCRATCH True
+uv run papermill hive/hive_lab.ipynb hive/hive_lab.executed.ipynb -p NETWORK_MODE local
 uv run papermill spark/spark_infra.ipynb spark/spark_infra.executed.ipynb -p NETWORK_MODE local -p START_FROM_SCRATCH True
 docker exec -w /opt/spark/work-dir/labs-setup spark-jupyter papermill spark/spark_lab.ipynb /tmp/spark_lab.executed.ipynb -k python3 -p NETWORK_MODE local
 
@@ -98,5 +98,5 @@ Generated Compose files, state, credentials, keys, certificates, and `*.executed
 - Hadoop completes before Hive and Spark; both dependent stacks complete successfully.
 - All supported infrastructure/lab pairs pass in Local mode and VPN mode.
 - Local clients use `127.0.0.1`; VPN base and wildcard service DNS tests resolve to `VPN_HOST_IP`.
-- Spark validates all six tracked JAR checksums (Iceberg, Delta Lake, ANTLR and GraphFrames) and performs no runtime Maven resolution or download; `spark_infra` reports GraphFrames 0.12.3 ready in `spark-jupyter` and every Worker.
+- Spark validates all eight tracked JAR checksums (Iceberg 1.12.0, five Delta Lake 4.3.1 JARs and two GraphFrames 0.12.3 JARs) and performs no runtime Maven resolution or download; `spark_infra` reports GraphFrames 0.12.3 ready in `spark-jupyter` and every Worker.
 - Cleanup leaves no required generated output in version control.

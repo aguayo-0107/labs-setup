@@ -13,7 +13,14 @@
 # ---
 
 # %% [markdown]
-# # Setup
+# # Redis Cluster lab — redis-py
+#
+# ## 1. Parameters
+#
+# - **What:** default values for `NETWORK_MODE`, the VPN identity.
+# - **Why:** the same notebook serves Local mode (ports on `127.0.0.1`) and VPN mode (`<container>.<alias>.<domain>`).
+# - **How:** the cell is tagged `parameters`; papermill inserts an `injected-parameters` cell right after it with the `-p` values.
+# - 📄 [papermill — Parameterize](https://papermill.readthedocs.io/en/latest/usage-parameterize.html)
 
 # %% tags=["parameters"]
 # Local mode is the portable default; VPN mode publishes services on this host.
@@ -24,7 +31,11 @@ VPN_DOMAIN = "vpn.itam.mx"
 VPN_CLIENT_ALIAS = "mavasbel"
 
 # %% [markdown]
-# Validates the injected network parameters and derives `VPN_CLIENT_DOMAIN`: `NETWORK_MODE` must be lowercase `local` or `vpn`, VPN values must stay in the `10.15.20.*` subnet, and the client alias must be a valid single DNS label.
+# ## 2. Validate the parameters
+#
+# - **What:** lower-cases `NETWORK_MODE` and `VPN_CLIENT_ALIAS` and builds `VPN_CLIENT_DOMAIN = <alias>.<domain>`.
+# - **Why:** a wrong value must stop the notebook here, before any container changes.
+# - **How:** rejects any mode other than `local`/`vpn` and, in VPN mode, a host IP outside `10.15.20.*`, and an alias that is not lower-case letters, digits and inner hyphens.
 
 # %%
 import re
@@ -45,7 +56,11 @@ if re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", VPN_CLIENT_ALIAS) is None:
 VPN_CLIENT_DOMAIN = f"{VPN_CLIENT_ALIAS}.{VPN_DOMAIN}"
 
 # %% [markdown]
-# Locates the `labs-setup` project root by searching upward for the directory that contains both `pyproject.toml` and the lab module folders, then changes the working directory into the `redis` module so relative asset paths resolve consistently.
+# ## 3. Find the module folder
+#
+# - **What:** locates the labs-setup root, changes into `redis/` and imports `run_command`.
+# - **Why:** relative paths (Compose file, `mount/`) then resolve the same way whether papermill or JupyterLab started the kernel; `run_command` passes an argument list to the program without a shell, so it behaves the same on Windows, macOS and Linux.
+# - **How:** walks up from the current folder to the first one holding `pyproject.toml`, `cassandra/` and `mongodb/`.
 
 # %%
 # Resolve module assets from the labs-setup root.
@@ -72,7 +87,11 @@ os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
 # %% [markdown]
-# Defines the six-node Redis cluster topology: container names, internal bridge IPs, mode-aware client hosts (`127.0.0.1` in local mode, `<container>.<VPN_CLIENT_DOMAIN>` in VPN mode), data/bus port ranges, and the shared credentials.
+# ## 4. Cluster constants
+#
+# - **What:** the six node names, their internal IPs `172.28.0.11-16`, client ports `6381-6386` and the ACL user `redis` / password `redis`.
+# - **Why:** they must match what `redis_infra` configured.
+# - **How:** client hosts are `127.0.0.1` (Local) or `redis-node-N.<alias>.<domain>` (VPN).
 
 # %%
 DOCKER_INTERNAL_HOST = "host.docker.internal"
@@ -101,7 +120,11 @@ REDIS_INIT_USER = "redis"
 REDIS_INIT_PASSWORD = "redis"
 
 # %% [markdown]
-# Builds the host-side mount directory path and creates it on disk so the cluster nodes have a writable shared location for their data.
+# ## 5. Paths
+#
+# - **What:** defines and creates `mount/` relative to the module folder.
+# - **Why:** kept for symmetry with the infrastructure notebook; the lab does not write there.
+# - **How:** `os.path.join` and `Path.mkdir(exist_ok=True)`.
 
 # %%
 import os
@@ -114,7 +137,12 @@ mount_path = Path(DOCKER_MOUNTDIR)
 mount_path.mkdir(parents=True, exist_ok=True)
 
 # %% [markdown]
-# # Session creation
+# ## 6. Connect to the cluster
+#
+# - **What:** opens a `RedisCluster` client from the six nodes, checks the cluster and writes and reads one test key.
+# - **Why:** a cluster client sends each key to the node that owns its hash slot; in Local mode the nodes announce Docker IPs the host cannot reach.
+# - **How:** `address_remap` turns each announced `172.28.0.x` into `127.0.0.1` (Local only); with `RANDOM_REPLICA` reads go to a random replica of the key's slot, so the client also learns the 3 replicas; `require_full_coverage=True` refuses a cluster with unassigned slots. The cell asserts state `ok`, 16 384 slots, 6 nodes, 3 primaries, 3 replicas and the expected endpoints.
+# - 📄 [redis-py 8.1.0 — Connections (`RedisCluster`)](https://redis.readthedocs.io/en/v8.1.0/connections.html) · [redis-py 8.1.0 — Clustering](https://redis.readthedocs.io/en/v8.1.0/clustering.html) · [Redis — Scale with Redis Cluster](https://redis.io/docs/latest/operate/oss_and_stack/management/scaling/)
 
 # %%
 import pprint
@@ -182,7 +210,12 @@ print(f"🟢 Cluster State: {cluster_status.upper()}")
 print(f"🌐 Nodes Discovered: {nodes_count}; primaries={len(primaries)}")
 
 # %% [markdown]
-# Configures pandas and IPython display options so later DataFrames render with full rows, columns, and width in the notebook output.
+# ## 7. Table display settings
+#
+# - **What:** sets pandas to show every row, column and full cell text.
+# - **Why:** the next cells print wide tables of cluster details.
+# - **How:** `pd.set_option(...)` for rows, columns and column width.
+# - 📄 [pandas — Options and settings](https://pandas.pydata.org/docs/user_guide/options.html)
 
 # %%
 import pandas as pd
@@ -197,7 +230,12 @@ pd.options.display.html.table_schema = False
 pd.options.display.expand_frame_repr = True
 
 # %% [markdown]
-# Opens a direct `Redis` connection to each of the six nodes, collects `CLUSTER INFO` and full node configuration from every one, and displays both as transposed DataFrames for side-by-side inspection.
+# ## 8. Per-node information
+#
+# - **What:** connects to each node on its own and shows its `CLUSTER INFO` and its full configuration side by side.
+# - **Why:** every node reports its own view, so the six columns can be compared.
+# - **How:** a plain `Redis` client per node, `CLUSTER INFO` and `CONFIG GET`, each list shown as a transposed DataFrame.
+# - 📄 [CLUSTER INFO](https://redis.io/docs/latest/commands/cluster-info/)
 
 # %%
 from redis import Redis
@@ -220,7 +258,12 @@ display(pd.DataFrame(cluster_info).transpose())
 display(pd.DataFrame(config_get).transpose())
 
 # %% [markdown]
-# Runs `CLUSTER NODES` through the cluster client and renders the full topology (nodes, roles, slots, connection state) as a DataFrame table.
+# ## 9. Cluster topology
+#
+# - **What:** shows `CLUSTER NODES`: every node's id, role, primary and slot ranges.
+# - **Why:** it is the cluster's own description of which node owns which slots.
+# - **How:** `redis_cluster.execute_command("CLUSTER NODES")` rendered as a table.
+# - 📄 [CLUSTER NODES](https://redis.io/docs/latest/commands/cluster-nodes/)
 
 # %%
 import pprint
@@ -240,7 +283,12 @@ except Exception as e:
     pprint.pprint(f"Error checking survivors: {e}")
 
 # %% [markdown]
-# Demonstrates cluster load distribution: resets command statistics on all nodes, performs 1000 `GET` reads over 10 keys through the cluster client, then reads each node's `commandstats` to show which primaries and replicas actually processed the requests.
+# ## 10. Where the reads go
+#
+# - **What:** resets the command counters, writes 10 keys, runs 1 000 `GET`s and prints how many `GET`s each node served.
+# - **Why:** writes go to the primary that owns the key; with `RANDOM_REPLICA` reads go to a replica of that primary (each has one), so the replicas should show the `GET`s.
+# - **How:** `CONFIG RESETSTAT` on every node, then `INFO commandstats` → `cmdstat_get.calls`. The loop reads `test_keys[i % REDIS_TOTAL_NODES]`, so only the first 6 of the 10 keys are read.
+# - 📄 [CONFIG RESETSTAT](https://redis.io/docs/latest/commands/config-resetstat/) · [INFO (`commandstats`)](https://redis.io/docs/latest/commands/info/) · [redis-py 8.1.0 — Clustering](https://redis.readthedocs.io/en/v8.1.0/clustering.html)
 
 # %%
 import uuid
@@ -289,7 +337,12 @@ for node in redis_cluster.get_nodes():
         print(f"❌ Node {node.port} ({role.upper()}): 0 GETs handled")
 
 # %% [markdown]
-# Cleans up the lab data by flushing every key on all primary nodes, then closes the cluster client to release its connection pools.
+# ## 11. Clean up
+#
+# - **What:** deletes every key on the three primaries and closes the cluster client.
+# - **Why:** replicas copy their primary, so flushing the primaries empties the whole cluster.
+# - **How:** `FLUSHALL` on each node returned by `get_primaries()`, then `redis_cluster.close()`.
+# - 📄 [FLUSHALL](https://redis.io/docs/latest/commands/flushall/)
 
 # %%
 # Flushes all in every primary node
@@ -307,7 +360,12 @@ for node in redis_cluster.get_primaries():
 redis_cluster.close()
 
 # %% [markdown]
-# Optional (fully commented out) monitoring snippet: polls `CLUSTER NODES` every two seconds so you can kill the current master by hand and watch failover events appear in real time.
+# ## 12. Watch a failover (optional)
+#
+# - **What:** commented loop that prints any `CLUSTER NODES` line marked `fail` or `handshake` every 2 s.
+# - **Why:** stop a primary container by hand and watch its replica take over.
+# - **How:** uncomment and run; stop it with the notebook's interrupt button.
+# - 📄 [CLUSTER NODES](https://redis.io/docs/latest/commands/cluster-nodes/)
 
 # %%
 # import time
@@ -334,7 +392,12 @@ redis_cluster.close()
 #     time.sleep(2)
 
 # %% [markdown]
-# Optional (fully commented out) manual-failover snippet: connects to a replica and issues `CLUSTER FAILOVER TAKEOVER` to promote it to master, then re-initializes the cluster client's node view.
+# ## 13. Force a failover (optional)
+#
+# - **What:** commented `CLUSTER FAILOVER TAKEOVER` on a replica, then a client refresh.
+# - **Why:** `TAKEOVER` promotes the replica without the agreement of its primary or of the other primaries.
+# - **How:** uncomment and run; `nodes_manager.initialize()` makes the client reload the topology.
+# - 📄 [CLUSTER FAILOVER](https://redis.io/docs/latest/commands/cluster-failover/)
 
 # %%
 # from redis import Redis

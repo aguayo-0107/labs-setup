@@ -20,6 +20,7 @@ from labs_audit.ports.outbound import JarStorePort, NotebookSourcePort
 pytestmark = pytest.mark.unit
 
 PARAMS = "\n".join(rules.PARAMETER_DEFAULTS)
+DOC = Cell("markdown", "## 1. Parameters\n- **What:** w.\n- **Why:** y.\n- **How:** h.")
 
 
 class FakeNotebooks(NotebookSourcePort):
@@ -30,10 +31,10 @@ class FakeNotebooks(NotebookSourcePort):
         return ("m/m_lab",)
 
     def committed(self, stem):
-        return Notebook(f"{stem}.ipynb", (Cell("code", self.source, ("parameters",)),), rules.KERNEL)
+        return Notebook(f"{stem}.ipynb", (DOC, Cell("code", self.source, ("parameters",))), rules.KERNEL)
 
     def canonical(self, stem):
-        return Notebook(f"{stem}.py", (Cell("code", PARAMS, ("parameters",)),), rules.KERNEL)
+        return Notebook(f"{stem}.py", (DOC, Cell("code", PARAMS, ("parameters",))), rules.KERNEL)
 
 
 class FakeJars(JarStorePort):

@@ -13,7 +13,14 @@
 # ---
 
 # %% [markdown]
-# # Setup
+# # Hive — infrastructure (metastore + HiveServer2 on the Hadoop cluster)
+#
+# ## 1. Parameters
+#
+# - **What:** default values for `NETWORK_MODE`, the VPN identity and `START_FROM_SCRATCH`.
+# - **Why:** the same notebook serves Local mode (ports on `127.0.0.1`) and VPN mode (`<container>.<alias>.<domain>`).
+# - **How:** the cell is tagged `parameters`; papermill inserts an `injected-parameters` cell right after it with the `-p` values.
+# - 📄 [papermill — Parameterize](https://papermill.readthedocs.io/en/latest/usage-parameterize.html)
 
 # %% tags=["parameters"]
 # Local mode is the portable default; VPN mode publishes services on this host.
@@ -25,7 +32,11 @@ VPN_CLIENT_ALIAS = "mavasbel"
 START_FROM_SCRATCH = False
 
 # %% [markdown]
-# Validates and normalizes the injected parameters: lowercases NETWORK_MODE and VPN_CLIENT_ALIAS, rejects unsupported network modes and malformed aliases, and derives VPN_CLIENT_DOMAIN from them.
+# ## 2. Validate the parameters
+#
+# - **What:** lower-cases `NETWORK_MODE` and `VPN_CLIENT_ALIAS` and builds `VPN_CLIENT_DOMAIN = <alias>.<domain>`.
+# - **Why:** a wrong value must stop the notebook here, before any container changes.
+# - **How:** rejects any mode other than `local`/`vpn` and, in VPN mode, a host IP outside `10.15.20.*`, and an alias that is not lower-case letters, digits and inner hyphens.
 
 # %%
 NETWORK_MODE = NETWORK_MODE.strip().lower()
@@ -47,7 +58,11 @@ if (
 VPN_CLIENT_DOMAIN = f"{VPN_CLIENT_ALIAS}.{VPN_DOMAIN}"
 
 # %% [markdown]
-# Walks up the directory tree from the current working directory to locate the labs-setup root (identified by pyproject.toml plus the cassandra and mongodb module folders), then changes into the hadoop module directory.
+# ## 3. Find the module folder
+#
+# - **What:** locates the labs-setup root, changes into `hive/` and imports `run_command`.
+# - **Why:** relative paths (Compose file, `mount/`) then resolve the same way whether papermill or JupyterLab started the kernel; `run_command` passes an argument list to the program without a shell, so it behaves the same on Windows, macOS and Linux.
+# - **How:** walks up from the current folder to the first one holding `pyproject.toml`, `cassandra/` and `mongodb/`.
 
 # %%
 # Resolve module assets from the labs-setup root.
@@ -69,7 +84,7 @@ if LABS_ROOT is None:
     raise RuntimeError(
         "Could not find the labs-setup root from the current directory"
     )
-MODULE_DIR = LABS_ROOT / "hadoop"
+MODULE_DIR = LABS_ROOT / "hive"
 import sys
 
 if str(LABS_ROOT) not in sys.path:
@@ -80,7 +95,12 @@ os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
 # %% [markdown]
-# Declares the Hive service topology and connection constants: PostgreSQL metastore database credentials, container names and hosts for hive-metastore-db / hive-metastore / hive-server2, internal and external ports, warehouse paths, dependent Hadoop endpoints, and image versions.
+# ## 4. Services and resources
+#
+# - **What:** names and ports of PostgreSQL (`hive-metastore-db`, `15432`), the metastore (`9083`) and HiveServer2 (`10000`, UI `10002`); images `postgres:18` and `apache/hive:4.0.1`; the Hadoop host names Hive uses.
+# - **Why:** Hive keeps table definitions in PostgreSQL through the metastore and runs queries on the Hadoop cluster; `hive-server2` is also the student's terminal (`docker exec -it -u hive -w /tmp/hive-lab hive-server2 bash`).
+# - **How:** both Hive JVMs get `-Xmx256m` (measured: largest live heap 162 MiB for HiveServer2 and 34 MiB for the metastore) and `MALLOC_ARENA_MAX=2`, so they fit their memory limits (1792 MB for HiveServer2, 512 MB for the metastore).
+# - 📄 [Java 8 — `-Xmx`](https://docs.oracle.com/javase/8/docs/technotes/tools/unix/java.html) · [mallopt(3) — `MALLOC_ARENA_MAX`](https://man7.org/linux/man-pages/man3/mallopt.3.html)
 
 # %%
 HIVE_START_FROM_SCRATCH = START_FROM_SCRATCH
@@ -181,7 +201,12 @@ APACHE_HIVE_IMAGE = "apache/hive:4.0.1"
 POSTGRES_IMAGE = "postgres:18"
 
 # %% [markdown]
-# Creates the local working directory and the DOCKER_MOUNTDIR bind-mount root shared with the Hive containers.
+# ## 5. Host folder
+#
+# - **What:** creates `mount/`, with one folder per Hive service.
+# - **Why:** the metastore database and the generated configuration live on the host.
+# - **How:** relative path `mount/` from the module folder.
+# - 📄 [Docker — Bind mounts](https://docs.docker.com/engine/storage/bind-mounts/)
 
 # %%
 import os
@@ -194,7 +219,12 @@ mount_path = Path(DOCKER_MOUNTDIR)
 mount_path.mkdir(parents=True, exist_ok=True)
 
 # %% [markdown]
-# # Stop hive-cluster.docker-compose.yml
+# ## 6. Stop the previous stack
+#
+# - **What:** with `START_FROM_SCRATCH=True`, removes the Hive containers and volumes; Hadoop is not touched.
+# - **Why:** a fresh build must not reuse an old metastore; with `False` the running stack is kept.
+# - **How:** `docker compose -f hive-cluster.docker-compose.yml down -v` (`check=False`).
+# - 📄 [docker compose down](https://docs.docker.com/reference/cli/docker/compose/down/)
 
 # %%
 import subprocess
@@ -209,7 +239,12 @@ else:
 
 
 # %% [markdown]
-# When HIVE_START_FROM_SCRATCH is set, empties each Hive service's bind-mount directory through a throwaway busybox container (the files belong to container users, e.g. PostgreSQL, so the host user cannot always delete them) and makes sure every directory exists.
+# ## 7. Delete the old state
+#
+# - **What:** with `START_FROM_SCRATCH=True`, empties each service's folder under `mount/`, then recreates the folders.
+# - **Why:** the PostgreSQL files belong to the container's user and the host user cannot always delete them.
+# - **How:** `rm -rf` runs as root inside a throwaway `busybox:1.36` container that sees each folder as `/target`.
+# - 📄 [docker container run](https://docs.docker.com/reference/cli/docker/container/run/)
 
 # %%
 def clear_bind_directory(path):
@@ -237,7 +272,12 @@ for container in [
     os.makedirs(os.path.join(DOCKER_MOUNTDIR, container), exist_ok=True)
 
 # %% [markdown]
-# # Create all config files
+# ## 8. Hadoop client files
+#
+# - **What:** writes `core-site.xml` (`fs.defaultFS=hdfs://namenode:8020`) and `hdfs-site.xml` for both Hive services.
+# - **Why:** without `hdfs-site.xml` Hive's HDFS client writes 3 replicas, but the cluster has 2 DataNodes, so every block it writes would stay under-replicated.
+# - **How:** the replication factor is read from the running NameNode with `hdfs getconf -confKey dfs.replication`.
+# - 📄 [HDFS commands (getconf)](https://hadoop.apache.org/docs/r3.4.3/hadoop-project-dist/hadoop-hdfs/HDFSCommands.html)
 
 # %%
 core_site_xml_content = f"""<?xml version="1.0"?>
@@ -278,7 +318,12 @@ for container in [HIVE_METASTORE_CONTAINER_NAME, HIVE_SERVER2_CONTAINER_NAME]:
         f.write(hdfs_site_xml_content)
 
 # %% [markdown]
-# Renders hive-site.xml with the metastore JDBC connection to PostgreSQL, Thrift and Web UI binds, Tez execution engine settings, scratch directories (staging stays at Hive's default `.hive-staging` next to each output: an absolute staging directory makes the query results cache point at files deleted when the query closes, so repeating a query fails with FileNotFoundException), and HDFS/YARN endpoints, writing it into the custom conf directory of both hive-metastore and hive-server2.
+# ## 9. hive-site.xml
+#
+# - **What:** writes Hive's main configuration for both services.
+# - **Why:** it tells Hive where its metastore database is, where HDFS and YARN are, and how to run queries.
+# - **How:** PostgreSQL JDBC connection (`javax.jdo.option.*`), `hive.metastore.uris=thrift://hive-metastore:9083`, `hive.execution.engine=tez` with the Tez libraries at `/apps/dist-lib/dist-lib.tar.gz` in HDFS, scratch folders, `hive.server2.enable.doAs=false` (queries run as `hive`), and `hive.fetch.task.conversion=more` plus `hive.exec.mode.local.auto=true` so small queries skip YARN.
+# - 📄 [Hive metastore administration](https://hive.apache.org/docs/latest/admin/adminmanual-metastore-administration/) · [Hive configuration properties](https://hive.apache.org/docs/latest/user/configuration-properties/) · [Hive configuration (scratch dirs)](https://hive.apache.org/docs/latest/admin/adminmanual-configuration/) · [Tez install (`tez.lib.uris`)](https://tez.apache.org/install.html)
 
 # %%
 hive_site_xml_content = f"""<?xml version="1.0"?>
@@ -423,7 +468,12 @@ for container in [HIVE_METASTORE_CONTAINER_NAME, HIVE_SERVER2_CONTAINER_NAME]:
         f.write(hive_site_xml_content)
 
 # %% [markdown]
-# Writes tez-site.xml configuring the Tez DAG runtime for YARN: dist-lib tarball URIs on HDFS, cluster classpath prefixes, application-master launch options, and Hive scratch directories, copied into both Hive containers' custom conf directories.
+# ## 10. tez-site.xml
+#
+# - **What:** writes the Tez configuration for both services.
+# - **Why:** Tez runs Hive's query plans as DAGs on YARN and must find its libraries and Hadoop's.
+# - **How:** `tez.lib.uris` points at the tarball in HDFS; `tez.use.cluster.hadoop-libs=true` and an extra classpath reuse the Hadoop jars installed on the NodeManagers.
+# - 📄 [Tez install (`tez.lib.uris`)](https://tez.apache.org/install.html)
 
 # %%
 tez_site_content = f"""<?xml version="1.0"?>
@@ -497,7 +547,11 @@ for container in [HIVE_METASTORE_CONTAINER_NAME, HIVE_SERVER2_CONTAINER_NAME]:
         f.write(tez_site_content)
 
 # %% [markdown]
-# Writes a log4j.properties file into both Hive containers' custom conf directories, routing Hive, Hadoop, Tez, Parquet, and Iceberg logging to the console at INFO level.
+# ## 11. Logging
+#
+# - **What:** writes `log4j.properties` for both services: everything at `INFO`, to the console.
+# - **Why:** `docker logs` then shows Hive, Hadoop, Tez, Parquet and Iceberg messages.
+# - **How:** a console appender on `System.err`.
 
 # %%
 import os
@@ -528,7 +582,12 @@ for container in [HIVE_METASTORE_CONTAINER_NAME, HIVE_SERVER2_CONTAINER_NAME]:
         f.write(log4j_properties_content)
 
 # %% [markdown]
-# # Start hive-cluster.docker-compose.yml
+# ## 12. Write the Compose file
+#
+# - **What:** generates `hive-cluster.docker-compose.yml` with PostgreSQL, the metastore and HiveServer2 on the existing `hadoop-network`.
+# - **Why:** Hive must reach the NameNode, the ResourceManager and the NodeManagers by name, so it joins Hadoop's network.
+# - **How:** the image reads `SERVICE_NAME`, `SERVICE_OPTS` and `HIVE_CUSTOM_CONF_DIR`; the metastore's entrypoint creates or checks its schema in PostgreSQL, while HiveServer2 runs with `IS_RESUME=true` and never touches it; HiveServer2 removes a stale PID file at start and creates `/tmp/hive-lab`; PostgreSQL listens on `PGPORT=15432` and is healthy when `pg_isready` answers.
+# - 📄 [Hive — Docker quickstart](https://hive.apache.org/development/quickstart/) · [postgres image](https://hub.docker.com/_/postgres) · [libpq — PGPORT](https://www.postgresql.org/docs/18/libpq-envars.html) · [pg_isready](https://www.postgresql.org/docs/18/app-pg-isready.html) · [Compose file — services](https://docs.docker.com/reference/compose-file/services/)
 
 # %%
 import yaml
@@ -706,13 +765,23 @@ with open(compose_filename, "w", encoding="utf-8", newline="\n") as f:
     f.write(yaml_contents)
 
 # %% [markdown]
-# Commented-out escape hatch: takes the HDFS NameNode out of safe mode via hdfs dfsadmin -safemode leave if provisioning is blocked by safe mode.
+# ## 13. Safe-mode escape hatch
+#
+# - **What:** a commented-out `hdfs dfsadmin -safemode leave`.
+# - **Why:** only needed by hand if the NameNode stays in safe mode and blocks writes.
+# - **How:** nothing runs unless the line is uncommented.
+# - 📄 [HDFS commands (getconf)](https://hadoop.apache.org/docs/r3.4.3/hadoop-project-dist/hadoop-hdfs/HDFSCommands.html)
 
 # %%
 # # !docker exec namenode hdfs dfsadmin -safemode leave
 
 # %% [markdown]
-# Provisions HDFS for Hive: clears stale /tmp/hive and warehouse paths when starting from scratch, then creates the hive Linux user and group inside the namenode container, grants sudo access, and prepares /tmp/hive plus the managed and external warehouse directories owned by hive:hive.
+# ## 14. HDFS folders and the `hive` user
+#
+# - **What:** with `START_FROM_SCRATCH=True`, clears `/tmp/hive` and the warehouse; then creates the `hive` user in `namenode` and the HDFS folders `/tmp/hive` and `/user/hive/warehouse/{managed,external}`.
+# - **Why:** HDFS checks permissions against the users and groups known to the NameNode, and Hive writes its tables and scratch files there.
+# - **How:** `groupadd`/`useradd` inside `namenode`, then `hdfs dfs -mkdir -p`, `-chown -R hive:hive` and `-chmod -R 777`.
+# - 📄 [FileSystem shell](https://hadoop.apache.org/docs/r3.4.3/hadoop-project-dist/hadoop-common/FileSystemShell.html)
 
 # %%
 if HIVE_START_FROM_SCRATCH:
@@ -744,19 +813,34 @@ run_command(["docker", "exec", "-u", "hadoop", "namenode", "hdfs", "dfs", "-chow
 run_command(["docker", "exec", "-u", "hadoop", "namenode", "hdfs", "dfs", "-chmod", "-R", "777", f"{HIVE_USERDIR}"], check=False)
 
 # %% [markdown]
-# Starts the full hive-cluster.docker-compose.yml stack in detached mode with --wait, so PostgreSQL, hive-metastore (which first creates or checks its schema) and hive-server2 (also the student's terminal) must all pass their healthchecks before execution continues. --remove-orphans removes containers of this Compose project that the file no longer defines, such as the former hive-terminal.
+# ## 15. Start Hive
+#
+# - **What:** starts the three services and waits until each health check passes.
+# - **Why:** HiveServer2 starts only after the metastore, and the metastore only after PostgreSQL.
+# - **How:** `docker compose up -d --wait --remove-orphans`.
+# - 📄 [docker compose up](https://docs.docker.com/reference/cli/docker/compose/up/)
 
 # %% vscode={"languageId": "markdown"}
 run_command(["docker", "compose", "-f", "hive-cluster.docker-compose.yml", "up", "-d", "--wait", "--remove-orphans"])
 
 # %% [markdown]
-# # Add .beeline dir to hive $HOME
+# ## 16. Beeline folder
+#
+# - **What:** creates `/home/hive/.beeline` owned by `hive` inside `hive-server2`.
+# - **Why:** Beeline stores its history there and warns when it cannot.
+# - **How:** `docker exec -u root hive-server2 bash -c "mkdir -p ... && chown -R hive:hive ..."`.
+# - 📄 [Setting up HiveServer2](https://hive.apache.org/docs/latest/admin/setting-up-hiveserver2/)
 
 # %%
 run_command(["docker", "exec", "-u", "root", "hive-server2", "bash", "-c", "mkdir -p /home/hive/.beeline && chown -R hive:hive /home/hive"], check=False)
 
 # %% [markdown]
-# # Load dist-lib (tez, common-collections) to HDFS
+# ## 17. Tez libraries in HDFS
+#
+# - **What:** builds `dist-lib.tar.gz` (Tez plus Hive's `commons-collections` and `commons-lang`) inside `hive-server2` and uploads it to `/apps/dist-lib/` in HDFS.
+# - **Why:** every Tez task on YARN downloads its libraries from `tez.lib.uris`; nothing is fetched from the internet.
+# - **How:** a script run in `hive-server2` builds the tarball (removing duplicate SLF4J jars); `docker cp` moves it to `namenode`, which runs `hdfs dfs -put`; the local temporary files are deleted.
+# - 📄 [Tez install (`tez.lib.uris`)](https://tez.apache.org/install.html) · [docker container cp](https://docs.docker.com/reference/cli/docker/container/cp/) · [FileSystem shell](https://hadoop.apache.org/docs/r3.4.3/hadoop-project-dist/hadoop-common/FileSystemShell.html)
 
 # %%
 import os

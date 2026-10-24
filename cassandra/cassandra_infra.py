@@ -13,7 +13,14 @@
 # ---
 
 # %% [markdown]
-# # Setup
+# # Cassandra cluster — infrastructure
+#
+# ## 1. Parameters
+#
+# - **What:** default values for `NETWORK_MODE`, the VPN identity and `START_FROM_SCRATCH`.
+# - **Why:** the same notebook serves Local mode (ports on `127.0.0.1`) and VPN mode (`<container>.<alias>.<domain>`).
+# - **How:** the cell is tagged `parameters`; papermill inserts an `injected-parameters` cell right after it with the `-p` values.
+# - 📄 [papermill — Parameterize](https://papermill.readthedocs.io/en/latest/usage-parameterize.html)
 
 # %% tags=["parameters"]
 # Local mode is the portable default; VPN mode publishes services on this host.
@@ -25,7 +32,11 @@ VPN_CLIENT_ALIAS = "mavasbel"
 START_FROM_SCRATCH = False
 
 # %% [markdown]
-# This cell normalizes and validates the injected NETWORK_MODE and VPN_CLIENT_ALIAS parameters, rejecting unsupported modes, a VPN host outside the 10.15.20.* subnet, or malformed aliases, and derives VPN_CLIENT_DOMAIN.
+# ## 2. Validate the parameters
+#
+# - **What:** lower-cases `NETWORK_MODE` and `VPN_CLIENT_ALIAS` and builds `VPN_CLIENT_DOMAIN = <alias>.<domain>`.
+# - **Why:** a wrong value must stop the notebook here, before any container changes.
+# - **How:** rejects any mode other than `local`/`vpn` and, in VPN mode, a host IP outside `10.15.20.*`, and an alias that is not lower-case letters, digits and inner hyphens.
 
 # %%
 import re
@@ -46,7 +57,11 @@ if re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", VPN_CLIENT_ALIAS) is None:
 VPN_CLIENT_DOMAIN = f"{VPN_CLIENT_ALIAS}.{VPN_DOMAIN}"
 
 # %% [markdown]
-# This cell walks up from the current directory to locate the labs-setup root (LABS_ROOT), resolves MODULE_DIR to its cassandra folder, and changes the working directory there so module assets resolve consistently.
+# ## 3. Find the module folder
+#
+# - **What:** locates the labs-setup root, changes into `cassandra/` and imports `run_command`.
+# - **Why:** relative paths (Compose file, `mount/`) then resolve the same way whether papermill or JupyterLab started the kernel; `run_command` passes an argument list to the program without a shell, so it behaves the same on Windows, macOS and Linux.
+# - **How:** walks up from the current folder to the first one holding `pyproject.toml`, `cassandra/` and `mongodb/`.
 
 # %%
 # Resolve module assets from the labs-setup root.
@@ -80,7 +95,11 @@ os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
 # %% [markdown]
-# This cell derives the full cluster configuration: node names, per-node gossip/RPC/SSL/JMX ports, client and advertised hosts selected from NETWORK_MODE via vpn_fqdn, certificate passwords, and the initial cassandra/cassandra credentials.
+# ## 4. Cluster settings
+#
+# - **What:** names the three nodes `cassandra-node-1..3` and gives each its own ports: CQL `9041-9043`, gossip `7001-7003`, TLS gossip `7501-7503`, JMX `7201-7203`.
+# - **Why:** all nodes publish on the same host, so no two can share a port; clients reach `127.0.0.1` (Local) or `cassandra-node-N.<alias>.<domain>` (VPN).
+# - **How:** `HOST_BIND_IP` is `127.0.0.1` or `VPN_HOST_IP`; in VPN mode the containers also use `VPN_DNS_IP` as their DNS server.
 
 # %%
 CASSANDRA_START_FROM_SCRATCH = START_FROM_SCRATCH
@@ -119,7 +138,11 @@ CASSANDRA_INIT_PASSWORD = "cassandra"
 CASSANDRA_WORKDIR = "/var/lib/cassandra"
 
 # %% [markdown]
-# This cell computes the host-side LOCALHOST_WORKDIR, DOCKER_MOUNTDIR, and CASSANDRA_LOCALHOST_CLUSTER_CA_CERTDIR paths and creates the mount directory that will back the node volumes.
+# ## 5. Host folders
+#
+# - **What:** defines `mount/` (node data and config) and `cluster_certs/` (the cluster CA) and creates `mount/`.
+# - **Why:** everything a node writes lives in a host folder, so it survives a container restart.
+# - **How:** paths are built from `MODULE_DIR` with `os.path.join`, which uses the separator of the running system.
 
 # %%
 import os
@@ -133,7 +156,12 @@ mount_path = Path(DOCKER_MOUNTDIR)
 mount_path.mkdir(parents=True, exist_ok=True)
 
 # %% [markdown]
-# # Stop cassandra-cluster.docker-compose.yml
+# ## 6. Stop the previous cluster
+#
+# - **What:** with `START_FROM_SCRATCH=True`, removes the cluster's containers, network and volumes.
+# - **Why:** a fresh build must not reuse old nodes or data; with `False` the running cluster is kept.
+# - **How:** `docker compose -f cassandra-cluster.docker-compose.yml down -v`; a missing file only prints an error (`check=False`).
+# - 📄 [docker compose down](https://docs.docker.com/reference/cli/docker/compose/down/)
 
 # %%
 if CASSANDRA_START_FROM_SCRATCH:
@@ -146,7 +174,11 @@ else:
 
 
 # %% [markdown]
-# When CASSANDRA_START_FROM_SCRATCH is true, this cell removes DOCKER_MOUNTDIR and the cluster CA certificate directory and recreates an empty mount directory; otherwise existing generated state is preserved.
+# ## 7. Delete the old state
+#
+# - **What:** with `START_FROM_SCRATCH=True`, deletes `mount/` and `cluster_certs/` and recreates an empty `mount/`.
+# - **Why:** old `cassandra.yaml` files, keystores and data would otherwise be reused by the next build.
+# - **How:** `shutil.rmtree` on both folders; nothing is deleted when the flag is `False`.
 
 # %%
 import shutil
@@ -157,10 +189,12 @@ if CASSANDRA_START_FROM_SCRATCH:
     Path(DOCKER_MOUNTDIR).mkdir(parents=True, exist_ok=True)
 
 # %% [markdown]
-# # Cluster keystore generation
-
-# %% [markdown]
-# ### Create cluster CA certificate
+# ## 8. Cluster certificate authority
+#
+# - **What:** creates a private CA (`ca.keystore`, 4096-bit RSA, 10 years) and exports its certificate `ca.crt`.
+# - **Why:** the nodes trust each other because every node certificate is signed by this one CA.
+# - **How:** `keytool -genkeypair` and `keytool -export` run in a throwaway `cassandra:5.0` container (`--rm`) that sees `cluster_certs/` as `/certs`; skipped when `ca.keystore` already exists.
+# - 📄 [keytool (Java 17)](https://docs.oracle.com/en/java/javase/17/docs/specs/man/keytool.html) · [docker container run](https://docs.docker.com/reference/cli/docker/container/run/)
 
 # %%
 ca_keystore_path = os.path.join(
@@ -199,7 +233,12 @@ if not os.path.isfile(ca_keystore_path):
     print("✅ Cassandra cluster CA certificate generated")
 
 # %% [markdown]
-# ### Create cassandra.yaml and cluster nodes certificates
+# ## 9. Node configuration and certificates
+#
+# - **What:** for each node, writes `cassandra.yaml`, copies `cassandra-rackdc.properties` and creates `keystore.jks` + `truststore.jks`.
+# - **Why:** the nodes log in with passwords (`PasswordAuthenticator`, `CassandraAuthorizer`) and encrypt all node-to-node traffic (`internode_encryption: all`); client connections stay unencrypted so `cqlsh` and the drivers connect directly.
+# - **How:** edits the bundled `cassandra.yaml` with PyYAML; `keytool` creates a key, a signing request, signs it with the CA and imports the chain; files that already exist are kept.
+# - 📄 [Cassandra 5.0 — Security](https://cassandra.apache.org/doc/5.0/cassandra/managing/operating/security.html) · [keytool (Java 17)](https://docs.oracle.com/en/java/javase/17/docs/specs/man/keytool.html) · [cassandra-rackdc.properties](https://cassandra.apache.org/doc/5.0/cassandra/managing/configuration/cass_rackdc_file.html)
 
 # %%
 import yaml
@@ -327,7 +366,12 @@ for i in range(0, CASSANDRA_TOTAL_NODES):
         assert os.path.isfile(node_keystore_path), node_keystore_path
 
 # %% [markdown]
-# # Start cassandra-cluster.docker-compose.yml
+# ## 10. Write the Compose file
+#
+# - **What:** generates `cassandra-cluster.docker-compose.yml`: one `cassandra:5.0` service per node, 1 GB and 2 CPUs each, 768 MB maximum heap.
+# - **Why:** the file is generated, never edited by hand, so ports, hosts and mounts always match the settings above.
+# - **How:** seeds, ports and broadcast addresses go in as image variables and JVM options; the health check requires `nodetool status` = `UN` **and** a successful `cqlsh` login, and node N starts after nodes 1..N-1.
+# - 📄 [cassandra image — environment variables](https://raw.githubusercontent.com/docker-library/docs/master/cassandra/content.md) · [nodetool status](https://cassandra.apache.org/doc/5.0/cassandra/managing/tools/nodetool/status.html) · [Compose file — services](https://docs.docker.com/reference/compose-file/services/)
 
 # %%
 import os
@@ -446,13 +490,23 @@ print(f"Successfully created: '{os.path.relpath(cassandra_compose_yaml_path)}'")
 display(Markdown(f"```yaml\n{cassandra_compose_yaml_contents}\n```"))
 
 # %% [markdown]
-# This cell writes jmxremote.password and builds the complete cassandra_compose_dict — one service per node with JVM options, bind-mounted volumes, port bindings on HOST_BIND_IP, DNS settings, resource limits, and nodetool-based health checks — then serializes it to cassandra-cluster.docker-compose.yml with yaml.dump.
+# ## 11. Start the cluster
+#
+# - **What:** starts the three nodes and waits until all of them are healthy.
+# - **Why:** the lab notebook can only run against a cluster that already accepts logins.
+# - **How:** `docker compose up -d --wait`; `run_command` raises an error if Compose exits with a failure.
+# - 📄 [docker compose up](https://docs.docker.com/reference/cli/docker/compose/up/)
 
 # %%
 run_command(["docker", "compose", "-f", "cassandra-cluster.docker-compose.yml", "up", "-d", "--wait"])
 
 # %% [markdown]
-# This cell collects commented-out diagnostic commands for opening cqlsh sessions on each node and running nodetool status, describecluster, and repair operations against the cluster.
+# ## 12. Manual checks (optional)
+#
+# - **What:** commented commands to open `cqlsh` on a node and run `nodetool status`, `describecluster` and `repair`.
+# - **Why:** they help diagnose a node by hand; the notebook never runs them.
+# - **How:** copy one line to a terminal without the leading `# !`; the user and password are the defaults `cassandra`/`cassandra`.
+# - 📄 [nodetool status](https://cassandra.apache.org/doc/5.0/cassandra/managing/tools/nodetool/status.html)
 
 # %%
 # # !docker exec -it cassandra-node-1 env CQLSH_PORT=9041 cqlsh -u cassandra -p cassandra

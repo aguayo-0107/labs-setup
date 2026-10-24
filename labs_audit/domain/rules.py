@@ -2,12 +2,15 @@
 
 The rules encode the contracts in AGENTS.md: one papermill parameters cell
 with the documented defaults, the dedicated kernel, no committed outputs,
-`.ipynb` derived from the canonical `.py`, Spark's six checksum-pinned JARs,
+`.ipynb` derived from the canonical `.py`, Spark's eight checksum-pinned JARs,
 and operating-system portability: no Windows-only path separators, no IPython
 shell escapes (a `!` line runs in `cmd.exe` on Windows and `/bin/sh`
 elsewhere, so quoting, globs and pipes differ), and text I/O that produces the
 same bytes on every system (explicit encoding, explicit newline on writes,
 explicit encoding when subprocess output is decoded, never `shell=True`).
+Every code cell is explained by the markdown cell right before it: a `## `
+heading and What / Why / How bullets; every markdown link is an https URL
+(tests/live/test_notebook_links.py checks that each one answers HTTP 200).
 """
 
 from __future__ import annotations
@@ -166,4 +169,52 @@ def jar_checksums(actual: Mapping[str, str | None]) -> list[Finding]:
     return findings
 
 
-NOTEBOOK_RULES = (parameters_cell, kernel, no_outputs, no_shell_escapes, no_windows_paths, portable_io)
+_SECTION_LABELS = ("## ", "- **What:**", "- **Why:**", "- **How:**")
+_MARKDOWN_LINK = re.compile(r"\[[^\]]+\]\(([^)\s]+)\)")
+
+
+def documented_cells(nb: Notebook) -> list[Finding]:
+    """Every code cell follows a markdown cell with a `## ` heading and What/Why/How bullets."""
+    findings: list[Finding] = []
+    for index, cell in enumerate(nb.cells):
+        if cell.cell_type != "code":
+            continue
+        previous = nb.cells[index - 1] if index else None
+        if previous is None or previous.cell_type != "markdown":
+            findings.append(Finding("documented", nb.path, f"cell {index} has no markdown cell before it"))
+            continue
+        lines = [line.strip() for line in previous.source.splitlines()]
+        missing = [label for label in _SECTION_LABELS if not any(line.startswith(label) for line in lines)]
+        if missing:
+            findings.append(Finding("documented", nb.path, f"cell {index - 1} lacks {', '.join(missing)}"))
+    return findings
+
+
+def markdown_links(nb: Notebook) -> tuple[str, ...]:
+    """Every link target written in the notebook's markdown cells, in order of appearance."""
+    return tuple(
+        target
+        for cell in nb.cells
+        if cell.cell_type == "markdown"
+        for target in _MARKDOWN_LINK.findall(cell.source)
+    )
+
+
+def https_links(nb: Notebook) -> list[Finding]:
+    return [
+        Finding("links", nb.path, f"link {target!r} is not an https:// URL")
+        for target in markdown_links(nb)
+        if not target.startswith("https://")
+    ]
+
+
+NOTEBOOK_RULES = (
+    parameters_cell,
+    kernel,
+    no_outputs,
+    no_shell_escapes,
+    no_windows_paths,
+    portable_io,
+    documented_cells,
+    https_links,
+)

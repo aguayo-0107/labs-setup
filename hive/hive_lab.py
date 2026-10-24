@@ -13,8 +13,14 @@
 # ---
 
 # %% [markdown]
-# # Setup
+# # Hive lab — tables over HDFS
 #
+# ## 1. Parameters
+#
+# - **What:** default values for `NETWORK_MODE`, the VPN identity.
+# - **Why:** the same notebook serves Local mode (ports on `127.0.0.1`) and VPN mode (`<container>.<alias>.<domain>`).
+# - **How:** the cell is tagged `parameters`; papermill inserts an `injected-parameters` cell right after it with the `-p` values.
+# - 📄 [papermill — Parameterize](https://papermill.readthedocs.io/en/latest/usage-parameterize.html)
 
 # %% tags=["parameters"]
 # Local mode is the portable default; VPN mode publishes services on this host.
@@ -25,7 +31,11 @@ VPN_DOMAIN = "vpn.itam.mx"
 VPN_CLIENT_ALIAS = "mavasbel"
 
 # %% [markdown]
-# Validates and normalizes the injected parameters: lowercases NETWORK_MODE and VPN_CLIENT_ALIAS, rejects unsupported network modes and malformed aliases, and derives VPN_CLIENT_DOMAIN from them.
+# ## 2. Validate the parameters
+#
+# - **What:** lower-cases `NETWORK_MODE` and `VPN_CLIENT_ALIAS` and builds `VPN_CLIENT_DOMAIN = <alias>.<domain>`.
+# - **Why:** a wrong value must stop the notebook here, before any container changes.
+# - **How:** rejects any mode other than `local`/`vpn` and, in VPN mode, a host IP outside `10.15.20.*`, and an alias that is not lower-case letters, digits and inner hyphens.
 
 # %%
 NETWORK_MODE = NETWORK_MODE.strip().lower()
@@ -47,7 +57,11 @@ if (
 VPN_CLIENT_DOMAIN = f"{VPN_CLIENT_ALIAS}.{VPN_DOMAIN}"
 
 # %% [markdown]
-# Walks up the directory tree from the current working directory to locate the labs-setup root (identified by pyproject.toml plus the cassandra and mongodb module folders), then changes into the hadoop module directory.
+# ## 3. Find the module folder
+#
+# - **What:** locates the labs-setup root, changes into `hive/` and imports `run_command`.
+# - **Why:** relative paths (Compose file, `mount/`) then resolve the same way whether papermill or JupyterLab started the kernel; `run_command` passes an argument list to the program without a shell, so it behaves the same on Windows, macOS and Linux.
+# - **How:** walks up from the current folder to the first one holding `pyproject.toml`, `cassandra/` and `mongodb/`.
 
 # %%
 # Resolve module assets from the labs-setup root.
@@ -69,7 +83,7 @@ if LABS_ROOT is None:
     raise RuntimeError(
         "Could not find the labs-setup root from the current directory"
     )
-MODULE_DIR = LABS_ROOT / "hadoop"
+MODULE_DIR = LABS_ROOT / "hive"
 import sys
 
 if str(LABS_ROOT) not in sys.path:
@@ -80,7 +94,11 @@ os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
 # %% [markdown]
-# Declares the client-side Hive connection constants: PostgreSQL metastore credentials, container names and client hosts resolved per NETWORK_MODE for hive-metastore-db / hive-metastore / hive-server2, internal and external ports, warehouse paths, and image versions.
+# ## 4. Connection constants
+#
+# - **What:** the container names, ports (HiveServer2 `10000`) and HDFS paths (`/user/hive/warehouse`) set by `hive_infra`.
+# - **Why:** they must match the running stack.
+# - **How:** HiveServer2 is reached at `127.0.0.1` (Local) or `hive-server2.<alias>.<domain>` (VPN).
 
 # %%
 DOCKER_INTERNAL_HOST = "host.docker.internal"
@@ -141,7 +159,11 @@ APACHE_HIVE_IMAGE = "apache/hive:4.0.1"
 POSTGRES_IMAGE = "postgres:18"
 
 # %% [markdown]
-# ## Prepare a datase in HDFS
+# ## 5. Generate the dataset
+#
+# - **What:** writes `sales.csv` with 50,000 rows `id, producto, categoria, monto, pais` and no header.
+# - **Why:** a fixed seed makes every run produce the same file; without a header the first table needs no option to skip it.
+# - **How:** `random.seed(2026)` and `csv.writer`.
 
 # %%
 import csv
@@ -167,7 +189,12 @@ with open(dataset_filename, "w", newline="", encoding="utf-8") as f:
 print(f"¡Dataset '{dataset_filename}' generado localmente con 50,000 filas!")
 
 # %% [markdown]
-# Uploads sales.csv into HDFS at the external table location under HIVE_DATADIR/lab_db/sales by copying it through the namenode container's temporary /tmp directory.
+# ## 6. Put the file in HDFS
+#
+# - **What:** creates `/user/hive/warehouse/external/lab_db/sales` and uploads `sales.csv` there.
+# - **Why:** an external table reads files that already exist in HDFS.
+# - **How:** `docker cp` into `namenode:/tmp`, then `hdfs dfs -mkdir -p` and `hdfs dfs -put -f`.
+# - 📄 [docker container cp](https://docs.docker.com/reference/cli/docker/container/cp/) · [FileSystem shell](https://hadoop.apache.org/docs/r3.4.3/hadoop-project-dist/hadoop-common/FileSystemShell.html)
 
 # %%
 # Pasamos el archivo del host al contenedor del namenode temporalmente, y luego lo consagramos en HDFS
@@ -176,7 +203,12 @@ run_command(["docker", "cp", "sales.csv", "namenode:/tmp/sales.csv"], check=Fals
 run_command(["docker", "exec", "namenode", "hdfs", "dfs", "-put", "-f", "/tmp/sales.csv", f"{HIVE_DATADIR}/external/lab_db/sales"], check=False)
 
 # %% [markdown]
-# # Hive connection test
+# ## 7. Connection test
+#
+# - **What:** connects to HiveServer2 as `hive` and lists the databases.
+# - **Why:** it fails early if HiveServer2 is not reachable.
+# - **How:** `pyhive.hive.Connection` and `pandas.read_sql("SHOW DATABASES", connection)`; the result must not be empty.
+# - 📄 [PyHive README (DB-API)](https://raw.githubusercontent.com/dropbox/PyHive/master/README.rst) · [pandas.read_sql](https://pandas.pydata.org/docs/reference/api/pandas.read_sql.html)
 
 # %%
 from pyhive import hive
@@ -198,7 +230,12 @@ assert not df_databases.empty
 connection.close()
 
 # %% [markdown]
-# # External table creation
+# ## 8. External table
+#
+# - **What:** recreates `lab_db` and defines `sales` over the CSV folder.
+# - **Why:** an `EXTERNAL` table only describes the files: dropping it leaves the data in HDFS.
+# - **How:** `CREATE EXTERNAL TABLE ... ROW FORMAT DELIMITED FIELDS TERMINATED BY ',' STORED AS TEXTFILE LOCATION 'hdfs://namenode:8020/...'`; `SHOW TABLES` must list `sales`.
+# - 📄 [Hive DDL (external tables, partitions, SHOW)](https://hive.apache.org/docs/latest/language/languagemanual-ddl/)
 
 # %%
 from pyhive import hive
@@ -248,7 +285,12 @@ assert "sales" in df_tables.astype(str).values
 connection.close()
 
 # %% [markdown]
-# # Select
+# ## 9. First rows
+#
+# - **What:** reads 5 rows of `sales`.
+# - **Why:** it checks Hive parses the CSV into the declared columns.
+# - **How:** `SELECT * FROM sales LIMIT 5` must return exactly 5 rows.
+# - 📄 [pandas.read_sql](https://pandas.pydata.org/docs/reference/api/pandas.read_sql.html)
 
 # %%
 from pyhive import hive
@@ -276,7 +318,11 @@ assert len(df_sample) == 5
 connection.close()
 
 # %% [markdown]
-# # Select with aggregation
+# ## 10. Aggregation
+#
+# - **What:** counts sales, average ticket and maximum sale per category and country.
+# - **Why:** a `GROUP BY` over all the files; the counts must add up to the 50,000 rows.
+# - **How:** `COUNT(*)`, `ROUND(AVG(monto), 2)` and `MAX(monto)` grouped by `categoria, pais`.
 
 # %%
 from pyhive import hive
@@ -315,7 +361,12 @@ assert int(df_summary["total_ventas"].sum()) == 50_000
 connection.close()
 
 # %% [markdown]
-# # Partitioning
+# ## 11. Partitioned table
+#
+# - **What:** creates `sales_partitioned` (partitioned by `pais`, stored as `SEQUENCEFILE`) and fills it from `sales`.
+# - **Why:** each country gets its own folder, so a query filtered by country reads only that folder.
+# - **How:** `hive.exec.dynamic.partition=true` and `hive.exec.dynamic.partition.mode=nonstrict` let Hive create the partitions from the last `SELECT` column; `SHOW PARTITIONS` must return `pais=CO`, `ES`, `MX`, `US`.
+# - 📄 [Hive DDL (external tables, partitions, SHOW)](https://hive.apache.org/docs/latest/language/languagemanual-ddl/) · [Hive DML (dynamic partition inserts)](https://hive.apache.org/docs/latest/language/languagemanual-dml/)
 
 # %%
 from pyhive import hive
@@ -370,9 +421,14 @@ assert partitions == {"pais=CO", "pais=ES", "pais=MX", "pais=US"}, partitions
 connection.close()
 
 # %% [markdown]
-# Inspects the resulting HDFS layout with hdfs dfs -ls: the external sales data location and the sales_partitioned folders inside the Hive warehouse directory.
+# ## 12. Look at HDFS
+#
+# - **What:** lists the external table's folder and the partition folders of `sales_partitioned`.
+# - **Why:** it shows where each kind of table keeps its data: the external one where we put it, the managed one under the warehouse (`/user/hive/warehouse/managed/lab_db.db/`).
+# - **How:** `hdfs dfs -ls`, run with `docker exec namenode`.
+# - 📄 [FileSystem shell](https://hadoop.apache.org/docs/r3.4.3/hadoop-project-dist/hadoop-common/FileSystemShell.html)
 
 # %%
 # Se guarda por defecto en el 'warehouse directory' configurado en {HIVE_DATADIR}
 run_command(["docker", "exec", "namenode", "hdfs", "dfs", "-ls", f"{HIVE_DATADIR}/external/lab_db/sales"], check=False)
-run_command(["docker", "exec", "namenode", "hdfs", "dfs", "-ls", f"{HIVE_DATADIR}/internal/lab_db.db/sales_partitioned/"], check=False)
+run_command(["docker", "exec", "namenode", "hdfs", "dfs", "-ls", f"{HIVE_DATADIR}/managed/lab_db.db/sales_partitioned/"], check=False)

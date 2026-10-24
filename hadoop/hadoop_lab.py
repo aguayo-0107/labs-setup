@@ -13,8 +13,14 @@
 # ---
 
 # %% [markdown]
-# # Setup
+# # Hadoop lab — HDFS and MapReduce
 #
+# ## 1. Parameters
+#
+# - **What:** default values for `NETWORK_MODE`, the VPN identity.
+# - **Why:** the same notebook serves Local mode (ports on `127.0.0.1`) and VPN mode (`<container>.<alias>.<domain>`).
+# - **How:** the cell is tagged `parameters`; papermill inserts an `injected-parameters` cell right after it with the `-p` values.
+# - 📄 [papermill — Parameterize](https://papermill.readthedocs.io/en/latest/usage-parameterize.html)
 
 # %% tags=["parameters"]
 # Local mode is the portable default; VPN mode publishes services on this host.
@@ -25,7 +31,11 @@ VPN_DOMAIN = "vpn.itam.mx"
 VPN_CLIENT_ALIAS = "mavasbel"
 
 # %% [markdown]
-# Validates and normalizes the injected parameters: lowercases NETWORK_MODE and VPN_CLIENT_ALIAS, rejects unsupported network modes and malformed aliases, and derives VPN_CLIENT_DOMAIN from them.
+# ## 2. Validate the parameters
+#
+# - **What:** lower-cases `NETWORK_MODE` and `VPN_CLIENT_ALIAS` and builds `VPN_CLIENT_DOMAIN = <alias>.<domain>`.
+# - **Why:** a wrong value must stop the notebook here, before any container changes.
+# - **How:** rejects any mode other than `local`/`vpn` and, in VPN mode, a host IP outside `10.15.20.*`, and an alias that is not lower-case letters, digits and inner hyphens.
 
 # %%
 NETWORK_MODE = NETWORK_MODE.strip().lower()
@@ -47,7 +57,11 @@ if (
 VPN_CLIENT_DOMAIN = f"{VPN_CLIENT_ALIAS}.{VPN_DOMAIN}"
 
 # %% [markdown]
-# Walks up the directory tree from the current working directory to locate the labs-setup root (identified by pyproject.toml plus the cassandra and mongodb module folders), then changes into the hadoop module directory.
+# ## 3. Find the module folder
+#
+# - **What:** locates the labs-setup root, changes into `hadoop/` and imports `run_command`.
+# - **Why:** relative paths (Compose file, `mount/`) then resolve the same way whether papermill or JupyterLab started the kernel; `run_command` passes an argument list to the program without a shell, so it behaves the same on Windows, macOS and Linux.
+# - **How:** walks up from the current folder to the first one holding `pyproject.toml`, `cassandra/` and `mongodb/`.
 
 # %%
 # Resolve module assets from the labs-setup root.
@@ -80,7 +94,11 @@ os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
 # %% [markdown]
-# Defines the client-side Hadoop connection settings and cluster topology: NameNode and ResourceManager client hosts and ports, DataNode and NodeManager endpoints, replication factor, worker counts, and HDFS directory paths resolved per NETWORK_MODE.
+# ## 4. Client settings
+#
+# - **What:** the hosts and ports the notebook uses to reach the cluster, and `HADOOP_DATA_RECORDS = 100_000`.
+# - **Why:** they must match what `hadoop_infra` configured.
+# - **How:** hosts are `127.0.0.1` (Local) or `namenode` / `resourcemanager` `.<alias>.<domain>` (VPN); `HADOOP_START_FROM_SCRATCH=False` reuses the generated data if it exists.
 
 # %%
 HADOOP_START_FROM_SCRATCH = False
@@ -142,7 +160,12 @@ HADOOP_DATANODE_DATADIR = "/opt/hadoop/dfs/data"
 HADOOP_HDFS_DATADIR = "/opt/hadoop/work-dir"
 
 # %% [markdown]
-# Verifies the data path to the running cluster by querying the NameNode JMX endpoint and the ResourceManager REST API over the configured client host, asserting the YARN cluster reports state STARTED.
+# ## 5. Check the cluster answers
+#
+# - **What:** asks the NameNode for its JMX `NameNodeInfo` and the ResourceManager for its cluster state.
+# - **Why:** it fails early, with a clear message, if the cluster is down or unreachable.
+# - **How:** `GET :9870/jmx?qry=Hadoop:service=NameNode,name=NameNodeInfo` must return beans; `GET :8088/ws/v1/cluster/info` must say `STARTED`.
+# - 📄 [ResourceManager REST API](https://hadoop.apache.org/docs/r3.4.3/hadoop-yarn/hadoop-yarn-site/ResourceManagerRest.html)
 
 # %%
 import json
@@ -168,7 +191,12 @@ print(
 )
 
 # %% [markdown]
-# Sets up the local working and bind-mount directories, then cross-checks cluster health again over HTTP: NameNode JMX via requests plus ResourceManager /ws/v1/cluster/metrics, asserting all HADOOP_NUM_WORKERS nodes are active.
+# ## 6. Folders and YARN capacity
+#
+# - **What:** creates the local `mount/` folder and checks YARN has 2 active NodeManagers.
+# - **Why:** a MapReduce job needs NodeManagers to run its tasks.
+# - **How:** `GET :8088/ws/v1/cluster/metrics` → `activeNodes == 2`.
+# - 📄 [ResourceManager REST API](https://hadoop.apache.org/docs/r3.4.3/hadoop-yarn/hadoop-yarn-site/ResourceManagerRest.html)
 
 # %%
 import os
@@ -196,7 +224,12 @@ metrics = yarn_metrics.json()["clusterMetrics"]
 assert metrics["activeNodes"] == HADOOP_NUM_WORKERS, metrics
 
 # %% [markdown]
-# Generates a deterministic synthetic dataset of HADOOP_DATA_RECORDS CSV rows (ts, id, user, amount, category, country) using Faker and random with fixed seeds, writing data.csv locally only when missing or when HADOOP_START_FROM_SCRATCH is set.
+# ## 7. Generate the dataset
+#
+# - **What:** writes `data.csv` with 100,000 fake sales (`ts, id, user, amount, category, country`).
+# - **Why:** fixed seeds make every run produce the same file, so results can be compared.
+# - **How:** `Faker.seed(2026)` and `random.seed(2026)`; the file is only regenerated if missing or with `HADOOP_START_FROM_SCRATCH=True`.
+# - 📄 [Faker — Seeding](https://faker.readthedocs.io/en/master/#seeding-the-generator)
 
 # %%
 import csv
@@ -234,7 +267,12 @@ if HADOOP_START_FROM_SCRATCH or not os.path.exists(dataset_source_path):
 
 
 # %% [markdown]
-# Copies the generated data.csv into the namenode container's mounted work-dir so it can be uploaded to HDFS from inside the cluster.
+# ## 8. Hand the file to the NameNode container
+#
+# - **What:** copies `data.csv` into `mount/namenode/work-dir`.
+# - **Why:** that folder is `/opt/hadoop/work-dir` inside `namenode`, where the `hdfs` commands run.
+# - **How:** `shutil.copy` on the host.
+# - 📄 [Docker — Bind mounts](https://docs.docker.com/engine/storage/bind-mounts/)
 
 # %%
 import shutil
@@ -245,8 +283,12 @@ if HADOOP_START_FROM_SCRATCH or not os.path.exists(dataset_dest_path):
     shutil.copy(dataset_source_path, dataset_dest_path)
 
 # %% [markdown]
-# ### Create HDFS input directory and clear previous output
+# ## 9. Prepare the HDFS folders
 #
+# - **What:** creates the HDFS `input` folder and removes a previous `output`.
+# - **Why:** MapReduce refuses to write into an output folder that already exists.
+# - **How:** `hdfs dfs -mkdir -p` and `hdfs dfs -rm -r -f`, run with `docker exec namenode`.
+# - 📄 [FileSystem shell](https://hadoop.apache.org/docs/r3.4.3/hadoop-project-dist/hadoop-common/FileSystemShell.html)
 
 # %%
 run_command(["docker", "exec", "namenode", "hdfs", "dfs", "-mkdir", "-p", f"{HADOOP_HDFS_DATADIR}/input"], check=False)
@@ -254,23 +296,35 @@ run_command(["docker", "exec", "namenode", "hdfs", "dfs", "-rm", "-r", "-f", f"{
 print("HDFS environment initialized.")
 
 # %% [markdown]
-# ### Upload from the container's mount point to HDFS
+# ## 10. Upload to HDFS
 #
+# - **What:** copies `data.csv` from the container's disk into HDFS and lists it.
+# - **Why:** MapReduce reads its input from HDFS, where the file is split into blocks spread over the DataNodes.
+# - **How:** `hdfs dfs -put -f` and `hdfs dfs -ls`.
+# - 📄 [FileSystem shell](https://hadoop.apache.org/docs/r3.4.3/hadoop-project-dist/hadoop-common/FileSystemShell.html)
 
 # %%
 run_command(["docker", "exec", "namenode", "hdfs", "dfs", "-put", "-f", f"{HADOOP_WORKDIR}/data.csv", f"{HADOOP_HDFS_DATADIR}/input/"], check=False)
 run_command(["docker", "exec", "namenode", "hdfs", "dfs", "-ls", f"{HADOOP_HDFS_DATADIR}/input"], check=False)
 
 # %% [markdown]
-# ### Check block locations and replication across datanodes
+# ## 11. Blocks and replicas
 #
+# - **What:** shows the file's blocks and on which DataNodes each copy lives.
+# - **Why:** with replication `2`, every block must appear on both DataNodes.
+# - **How:** `hdfs fsck <file> -files -blocks -locations`.
+# - 📄 [HDFS commands (fsck)](https://hadoop.apache.org/docs/r3.4.3/hadoop-project-dist/hadoop-hdfs/HDFSCommands.html) · [HDFS architecture (blocks and replication)](https://hadoop.apache.org/docs/r3.4.3/hadoop-project-dist/hadoop-hdfs/HdfsDesign.html)
 
 # %%
 run_command(["docker", "exec", "namenode", "hdfs", "fsck", f"{HADOOP_HDFS_DATADIR}/input/data.csv", "-files", "-blocks", "-locations"], check=False)
 
 # %% [markdown]
-# ### Generate mapper and reducer scripts
+# ## 12. Mapper and reducer
 #
+# - **What:** writes `mapper.py` (emits `category<TAB>amount` per row) and `reducer.py` (adds the amounts of each category).
+# - **Why:** Hadoop Streaming runs any program that reads standard input and writes standard output; between the two phases Hadoop sorts by key, so the reducer sees each category's lines together.
+# - **How:** files are written into `mount/resourcemanager/work-dir`, where the job is submitted.
+# - 📄 [Hadoop Streaming](https://hadoop.apache.org/docs/r3.4.3/hadoop-streaming/HadoopStreaming.html) · [MapReduce tutorial](https://hadoop.apache.org/docs/r3.4.3/hadoop-mapreduce-client/hadoop-mapreduce-client-core/MapReduceTutorial.html)
 
 # %%
 import os
@@ -337,8 +391,12 @@ print("Reducer script created")
 run_command(["docker", "exec", "resourcemanager", "ls", "-l", f"{HADOOP_WORKDIR}"], check=False)
 
 # %% [markdown]
-# ### Count directly in namenode for validation
+# ## 13. The same computation without Hadoop
 #
+# - **What:** runs `cat data.csv | mapper | sort | reducer` inside `namenode`.
+# - **Why:** it shows what MapReduce does on one machine and gives a result to compare with the cluster's.
+# - **How:** the scripts are copied into the NameNode's work folder; `sort` stands in for Hadoop's shuffle.
+# - 📄 [Hadoop Streaming](https://hadoop.apache.org/docs/r3.4.3/hadoop-streaming/HadoopStreaming.html)
 
 # %%
 shutil.copy(
@@ -354,8 +412,12 @@ shutil.copy(
 run_command(["docker", "exec", "namenode", "bash", "-c", f"cat {HADOOP_WORKDIR}/data.csv | python {HADOOP_WORKDIR}/mapper.py | sort | python {HADOOP_WORKDIR}/reducer.py"], check=False)
 
 # %% [markdown]
-# # Hadoop map reduce
+# ## 14. Run the MapReduce job
 #
+# - **What:** submits the streaming job to YARN with 2 reducers and 1024 MB per map and reduce task, then lists `output`.
+# - **Why:** the work is split into map tasks over the HDFS blocks and run on the NodeManagers.
+# - **How:** `yarn jar hadoop-streaming-3.4.3.jar` with `-files` (ships the scripts to every task), `-mapper`, `-reducer`, `-input`, `-output`; the cell fails if the job's exit code is not 0.
+# - 📄 [Hadoop Streaming](https://hadoop.apache.org/docs/r3.4.3/hadoop-streaming/HadoopStreaming.html) · [mapred-default.xml](https://hadoop.apache.org/docs/r3.4.3/hadoop-mapreduce-client/hadoop-mapreduce-client-core/mapred-default.xml)
 
 # %%
 # 1. Ensure the output directory is clean
@@ -389,7 +451,12 @@ assert mapreduce_job.returncode == 0, mapreduce_job.stderr[-4000:]
 run_command(["docker", "exec", "namenode", "hdfs", "dfs", "-ls", f"{HADOOP_HDFS_DATADIR}/output"], check=False)
 
 # %% [markdown]
-# Merges the MapReduce output part-files into a single file in the container's work-dir and sorts it into output_sorted.csv.
+# ## 15. Merge and sort the result
+#
+# - **What:** joins the reducers' `part-*` files into `output.csv` and sorts it into `output_sorted.csv`.
+# - **Why:** with 2 reducers the result is split in two files, each covering part of the categories.
+# - **How:** `hdfs dfs -getmerge` then `sort`.
+# - 📄 [FileSystem shell](https://hadoop.apache.org/docs/r3.4.3/hadoop-project-dist/hadoop-common/FileSystemShell.html)
 
 # %%
 # 4. Merge and sort output
@@ -397,7 +464,11 @@ run_command(["docker", "exec", "namenode", "hdfs", "dfs", "-getmerge", f"{HADOOP
 run_command(["docker", "exec", "namenode", "bash", "-c", f"cat {HADOOP_WORKDIR}/output.csv | sort > {HADOOP_WORKDIR}/output_sorted.csv"], check=False)
 
 # %% [markdown]
-# Reads output_sorted.csv back from the namenode container and validates the MapReduce result: non-empty output where every category row carries a tab-separated aggregate value.
+# ## 16. Check the result
+#
+# - **What:** reads `output_sorted.csv` and checks it is not empty and has `category<TAB>total` lines.
+# - **Why:** it turns the job into a check that fails if MapReduce produced nothing.
+# - **How:** `docker exec namenode cat ...`.
 
 # %%
 import subprocess

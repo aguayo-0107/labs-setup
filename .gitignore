@@ -30,12 +30,14 @@ hadoop/mount/datanode-*
 hadoop/mount/namenode
 hadoop/mount/nodemanager-*
 hadoop/mount/resourcemanager
-hadoop/mount/hive-metastore
-hadoop/mount/hive-metastore-db
-hadoop/mount/hive-server2
 hadoop/envs
 hadoop/data.csv
-hadoop/sales.csv
+
+# hive data
+hive/mount/hive-metastore
+hive/mount/hive-metastore-db
+hive/mount/hive-server2
+hive/sales.csv
 
 # spark data
 spark/data/
