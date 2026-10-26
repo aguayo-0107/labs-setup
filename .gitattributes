@@ -1,0 +1,12 @@
+# Every text file is stored and checked out with LF on every operating system.
+# Scripts and configuration are mounted into Linux containers, where a CRLF
+# line ending breaks shebangs, shell scripts and key files.
+* text=auto eol=lf
+
+*.jar binary
+*.tar.gz binary
+*.gz binary
+*.zip binary
+*.png binary
+*.jpg binary
+*.ico binary

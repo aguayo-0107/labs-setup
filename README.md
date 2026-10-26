@@ -31,6 +31,7 @@ Spin up **Cassandra · MongoDB · Hadoop · Hive · Spark · OpenSearch · Redis
    - [OpenSearch](#opensearch)
    - [Redis](#redis)
    - [Neo4j](#neo4j)
+   - [AWS (local emulator)](#aws-local-emulator)
 7. [Network modes](#network-modes)
 8. [Cluster lifecycle & cleanup](#cluster-lifecycle--cleanup)
 9. [Security notes](#security-notes)
@@ -49,8 +50,8 @@ You never hand-edit a raw Compose file. The notebooks generate them from Python 
 
 | | |
 |---|---|
-| **Language / tooling** | Python 3.10 · Java 17 · Jupyter · uv · Docker Compose v2 |
-| **Databases & engines** | Cassandra 5.0 · MongoDB 7.0 · Hadoop 3.4.3 · Hive 4.0.1 · Spark 3.5.7 · OpenSearch 3.4.0 · Redis 8.4 · Neo4j (ubi9) |
+| **Language / tooling** | Python 3.10 · Jupyter · uv · Docker Compose v2 (Java 17 and the AWS CLI run inside containers) |
+| **Databases & engines** | Cassandra 5.0 · MongoDB 7.0 · Hadoop 3.4.3 · Hive 4.0.1 · Spark 4.1.2 · OpenSearch 3.4.0 · Redis 8.4 · Neo4j (ubi9) · AWS emulated locally (Moto 5.2.4 + Athena gateway) |
 | **Topology** | Distributed, multi-node, with Local loopback and alias-aware VPN client paths |
 | **Learning model** | `infra` (deploy) → `lab` (learn) notebook pairs |
 
@@ -70,7 +71,7 @@ flowchart LR
         C["Cassandra 5.0 ×3"]
         M["MongoDB 7.0 ×3 + configsvr"]
         H["Hadoop 3.4.3 + Hive 4.0.1"]
-        S["Spark 3.5.7 master + 3 workers"]
+        S["Spark 4.1.2 master + 3 workers"]
         O["OpenSearch 3.4.0 ×3"]
         R["Redis 8.4 ×6"]
         N["Neo4j"]
@@ -93,10 +94,11 @@ flowchart LR
 | MongoDB | `mongo:7.0` | 3 + 3 config servers | `mongodb_infra.ipynb` · `mongodb_infra_configsvr.ipynb` | `mongodb_lab.ipynb` |
 | Hadoop | `apache/hadoop:3.4.3` | namenode + 2 datanodes | `hadoop_infra.ipynb` | `hadoop_lab.ipynb` |
 | Hive | `apache/hive:4.0.1` + `postgres:18` | metastore + server2 | `hive_infra.ipynb` | `hive_lab.ipynb` |
-| Spark | `apache/spark:3.5.7-…` + custom | master + 3 workers + JupyterLab | `spark_infra.ipynb` | `spark_lab.ipynb` |
+| Spark | `apache/spark:4.1.2-…` + custom | master + 3 workers + JupyterLab | `spark_infra.ipynb` | `spark_lab.ipynb` |
 | OpenSearch | `opensearchproject/opensearch:3.4.0` | 3 + dashboards | `opensearch_infra.ipynb` | `opensearch_lab.ipynb` |
 | Redis | `redis:8.4.0-bookworm` | 6 (cluster) | `redis_infra.ipynb` | `redis_lab.ipynb` |
 | Neo4j | `neo4j:ubi9` | 1 (+ APOC, GDS) | `neo4j_infra.ipynb` | `neo4j_lab.ipynb` |
+| AWS (local) | `motoserver/moto:5.2.4` + `apache/hive:4.0.1` + built gateway | Moto + Athena engine + Athena gateway | `aws_infra.ipynb` | `aws_lab.ipynb` |
 
 ---
 
@@ -326,7 +328,7 @@ Then install these extensions (open the Extensions view with `Ctrl+Shift+X`, or 
 
 ### 4. uv (Python 3.10 + dependencies)
 
-`uv` is the package manager this repo uses (it replaces `pip` + `venv` and installs the pinned Python 3.10 runtime for you). Python 3.10 matches the Spark 3.5.7 executors.
+`uv` is the package manager this repo uses (it replaces `pip` + `venv` and installs the pinned Python 3.10 runtime for you). Python 3.10 matches the Spark 4.1.2 executors.
 
 <details>
 <summary><b>Windows</b> (PowerShell)</summary>
@@ -356,15 +358,15 @@ Verify on any OS:
 uv --version   # e.g. uv 0.12.5
 ```
 
-### 5. Java 17
+### 5. Operating system notes
 
-Spark 3.5.7 requires a Java 17 runtime. Install [Eclipse Temurin 17](https://adoptium.net/temurin/releases/?version=17) and verify:
+The labs run the same on Windows, macOS and Linux. Everything that depends on a shell runs inside Linux containers; the only commands typed in a terminal of your own computer are single-line `docker`, `uv` or `python` commands that mean the same thing in PowerShell, `cmd`, bash and zsh. Neither Java nor the AWS CLI is installed on your computer: Spark's Java 17 and the AWS CLI v2 ship in the lab images.
 
-```bash
-java -version
-```
-
-The first line must report version 17. Newer Java releases are not a compatible substitute for this Spark version.
+| System | Notes |
+|---|---|
+| **Windows** | Docker Desktop with the WSL 2 backend. Use PowerShell (Windows Terminal or the VS Code terminal) for the host commands. Git keeps every text file with LF line endings (`.gitattributes`), so scripts mounted into containers work. |
+| **macOS** | Docker Desktop. On Apple Silicon, `apache/hadoop:3.4.3` exists only for `linux/amd64`; the Hadoop notebook declares that platform and Docker Desktop runs it under emulation (enable *Use Rosetta for x86_64/amd64 emulation* in Settings → General for speed). All other images include `arm64`. |
+| **Linux** | Docker Engine with the Compose plugin. Containers reach your computer only through published ports on `127.0.0.1`; no inbound firewall rule is needed. |
 
 ### 6. WireGuard (course VPN)
 
@@ -418,7 +420,7 @@ wg show
 |---|---|
 | Docker | Docker Desktop (Windows/macOS) or Docker Engine + Compose plugin (Linux) — see setup section |
 | Python | **3.10** (installed automatically by `uv`, see `.python-version`) |
-| Java | **17** for Spark 3.5.7 |
+| Java | not needed on your computer: the Spark images ship Java 17 |
 | uv | ≥ 0.12.5 (see setup section) |
 | Jupyter | installed via `uv sync` (pulls `ipykernel`) |
 | VPN access | membership to the course VPN, domain `vpn.itam.mx` (WireGuard — see setup section) |
@@ -433,7 +435,7 @@ wg show
 This directory is an independent `uv` project with its own `pyproject.toml`, `uv.lock`, and `.venv`. Run dependency and notebook commands from `labs-setup`; do not reuse the parent repository's environment.
 
 ```bash
-git clone https://github.com/non-relational-dbs/labs-setup.git
+git clone https://github.com/mavasbel-itam/non-relational-dbs-labs-setup.git labs-setup
 cd labs-setup
 
 # 1. Create the virtual environment with the exact pinned dependencies
@@ -478,8 +480,8 @@ uv run papermill opensearch/opensearch_lab.ipynb opensearch/opensearch_lab.execu
 uv run papermill hadoop/hadoop_infra.ipynb hadoop/hadoop_infra.executed.ipynb -p NETWORK_MODE local -p START_FROM_SCRATCH True
 uv run papermill hadoop/hadoop_lab.ipynb hadoop/hadoop_lab.executed.ipynb -p NETWORK_MODE local
 
-uv run papermill hadoop/hive_infra.ipynb hadoop/hive_infra.executed.ipynb -p NETWORK_MODE local -p START_FROM_SCRATCH True
-uv run papermill hadoop/hive_lab.ipynb hadoop/hive_lab.executed.ipynb -p NETWORK_MODE local
+uv run papermill hive/hive_infra.ipynb hive/hive_infra.executed.ipynb -p NETWORK_MODE local -p START_FROM_SCRATCH True
+uv run papermill hive/hive_lab.ipynb hive/hive_lab.executed.ipynb -p NETWORK_MODE local
 
 uv run papermill spark/spark_infra.ipynb spark/spark_infra.executed.ipynb -p NETWORK_MODE local -p START_FROM_SCRATCH True
 uv run papermill spark/spark_lab.ipynb spark/spark_lab.executed.ipynb -p NETWORK_MODE local
@@ -507,8 +509,8 @@ uv run papermill opensearch/opensearch_lab.ipynb opensearch/opensearch_lab.execu
 uv run papermill hadoop/hadoop_infra.ipynb hadoop/hadoop_infra.executed.ipynb -p NETWORK_MODE vpn -p VPN_HOST_IP 10.15.20.100 -p VPN_CLIENT_ALIAS mavasbel -p VPN_DOMAIN vpn.itam.mx -p START_FROM_SCRATCH True
 uv run papermill hadoop/hadoop_lab.ipynb hadoop/hadoop_lab.executed.ipynb -p NETWORK_MODE vpn -p VPN_HOST_IP 10.15.20.100 -p VPN_CLIENT_ALIAS mavasbel -p VPN_DOMAIN vpn.itam.mx
 
-uv run papermill hadoop/hive_infra.ipynb hadoop/hive_infra.executed.ipynb -p NETWORK_MODE vpn -p VPN_HOST_IP 10.15.20.100 -p VPN_CLIENT_ALIAS mavasbel -p VPN_DOMAIN vpn.itam.mx -p START_FROM_SCRATCH True
-uv run papermill hadoop/hive_lab.ipynb hadoop/hive_lab.executed.ipynb -p NETWORK_MODE vpn -p VPN_HOST_IP 10.15.20.100 -p VPN_CLIENT_ALIAS mavasbel -p VPN_DOMAIN vpn.itam.mx
+uv run papermill hive/hive_infra.ipynb hive/hive_infra.executed.ipynb -p NETWORK_MODE vpn -p VPN_HOST_IP 10.15.20.100 -p VPN_CLIENT_ALIAS mavasbel -p VPN_DOMAIN vpn.itam.mx -p START_FROM_SCRATCH True
+uv run papermill hive/hive_lab.ipynb hive/hive_lab.executed.ipynb -p NETWORK_MODE vpn -p VPN_HOST_IP 10.15.20.100 -p VPN_CLIENT_ALIAS mavasbel -p VPN_DOMAIN vpn.itam.mx
 
 uv run papermill spark/spark_infra.ipynb spark/spark_infra.executed.ipynb -p NETWORK_MODE vpn -p VPN_HOST_IP 10.15.20.100 -p VPN_CLIENT_ALIAS mavasbel -p VPN_DOMAIN vpn.itam.mx -p START_FROM_SCRATCH True
 uv run papermill spark/spark_lab.ipynb spark/spark_lab.executed.ipynb -p NETWORK_MODE vpn -p VPN_HOST_IP 10.15.20.100 -p VPN_CLIENT_ALIAS mavasbel -p VPN_DOMAIN vpn.itam.mx
@@ -598,7 +600,9 @@ The lab walks a full **MapReduce** job: upload to HDFS, inspect block replicatio
 
 ### Hive
 
-Hive 4.0.1 with a PostgreSQL 18 metastore, running on **Tez** — the infra notebook loads the Tez distribution into HDFS.
+Hive 4.0.1 with a PostgreSQL 18 metastore, running on **Tez** — the infra notebook packs the Tez libraries of the `apache/hive:4.0.1` image into HDFS.
+
+The module lives in `hive/`, separate from `hadoop/`. Its compose project `hive-cluster` joins the Hadoop module's Docker network `hadoop-network`, so `hadoop/hadoop_infra.ipynb` must have run and be healthy first.
 
 | Component | Hostname | Port |
 |---|---|---|
@@ -608,7 +612,10 @@ Hive 4.0.1 with a PostgreSQL 18 metastore, running on **Tez** — the infra note
 | HiveServer2 Web UI | `hive-server2` | 10002 |
 
 - Postgres: `hive` / `hive`, db `metastore`
-- Bundled: `apache-tez-0.10.2-bin.tar.gz` (loaded to HDFS) · `postgresql-42.7.10.jar`
+- No one-shot schema container: `hive-metastore` creates its schema in PostgreSQL on first start and checks it on every later start (`schematool -initOrUpgradeSchema`); HiveServer2 never touches the schema.
+- `hive-server2` is also the students' terminal: `docker exec -it -u hive -w /tmp/hive-lab hive-server2 bash` opens a shell with the Hive (Beeline) and HDFS clients, in the working folder `/tmp/hive-lab` (HiveServer2's own log and scratch files stay in `/tmp/hive`). Its limits are 1792 MB and 2 CPUs so HiveServer2 and the clients a student runs next to it fit together: over the full Hive lab walkthrough its non-reclaimable memory peaked at 62% of the limit, and at 72% with an idle Beeline session, a `GROUP BY` over 2,000,000 rows and a 50 MB `hdfs dfs -put` running at once (measured 2026-10-20).
+- Bundled: `postgresql-42.7.10.jar`, mounted into `hive-metastore` and `hive-server2`.
+- Tez: the infra notebook copies `/opt/tez` from `hive-server2`, adds Hive's `commons-collections` and `commons-lang` JARs, and uploads the result to HDFS as `/apps/dist-lib/dist-lib.tar.gz` (the `tez.lib.uris` of `tez-site.xml`). `hive/apache-tez-0.10.2-bin.tar.gz` is kept in the folder, but no notebook reads it.
 
 ```mermaid
 flowchart LR
@@ -622,7 +629,7 @@ The lab creates external tables, runs aggregations, and explores partitioning �
 
 ### Spark
 
-Spark 3.5.7 (Scala 2.12, Java 17, Python 3) with a **custom-built** JupyterLab image and a **venv-pack** job environment (for shipping self-contained Python virtualenvs to workers). Delta Lake and Apache Iceberg dependencies are bundled, so Spark does not resolve Maven packages or download JARs at runtime.
+Spark 4.1.2 (Scala 2.13, Java 17, Python 3) with a **custom-built** JupyterLab image and a **venv-pack** job environment (for shipping self-contained Python virtualenvs to workers). Delta Lake and Apache Iceberg dependencies are bundled, so Spark does not resolve Maven packages or download JARs at runtime.
 
 | Component | Port |
 |---|---|
@@ -630,10 +637,11 @@ Spark 3.5.7 (Scala 2.12, Java 17, Python 3) with a **custom-built** JupyterLab i
 | spark-worker 1 / 2 / 3 | 6081 / 6082 / 6083 (web UI) |
 | JupyterLab | 6888 · 4040 (Spark monitor) |
 
-- Base image `apache/spark:3.5.7-scala2.12-java17-python3-ubuntu`
+- Base image `apache/spark:4.1.2-scala2.13-java17-python3-ubuntu`
 - Custom images: `dockerfile.spark-jupyter`, `dockerfile.spark-job-venv`
-- Tracked, pinned, SHA-256-validated JARs: `iceberg-spark-runtime-3.5_2.12-1.6.1.jar`, `delta-spark_2.12-3.2.0.jar`, `delta-storage-3.2.0.jar`, `antlr4-runtime-4.9.3.jar`
-- The host-side Spark driver binds callback ports 4050/4051 and advertises `host.docker.internal`; executors use the shipped `venv-pack` Python environment and bundled classpath inside Docker.
+- Tracked, pinned, SHA-256-validated JARs: `iceberg-spark-runtime-4.1_2.13-1.12.0.jar` and Delta 4.3.1's `delta-spark_2.13`, `delta-storage`, `delta-kernel-api`, `delta-kernel-defaults`, and `delta-kernel-unitycatalog` (mounted at `/opt/spark/course-jars` and listed by the lab session), plus GraphFrames 0.12.3 `graphframes-spark4_2.13-0.12.3.jar` and `graphframes-graphx-spark4_2.13-0.12.3.jar` (mounted on Spark's default classpath `/opt/spark/jars` of `spark-jupyter` and every Worker, so any session can `from graphframes import GraphFrame`; `graphframes-py==0.12.3` is installed in `spark-jupyter`). GraphFrames' `datasketches` dependency is the exact 6.2.0/3.0.2 pair Spark 4.1.2 already ships.
+- The Spark Driver is the notebook kernel inside `spark-jupyter` (JupyterLab on port `6888`): it reaches `spark-master-internal:6077` and `hdfs://namenode:8020` on the Docker network and the workers connect back to `spark-jupyter:4050`/`4051` there, so no connection goes to your computer. labs-setup is mounted read-only at `/opt/spark/work-dir/labs-setup`; run `spark_lab.ipynb` from it in JupyterLab, or with papermill as in `LOAD_ME.md`. Executors use the shipped `venv-pack` Python environment and the bundled classpath.
+- The Python libraries used on both sides (`pandas`, `pyarrow`, `numpy`, `faker`) are pinned once in `spark_infra` (`SPARK_SHARED_PYTHON_PACKAGES`) for both images; the Worker-only packages (`venv-pack`, `faker-commerce`, `mimesis`) are pinned too. After both builds, `labs_parity` compares `pip freeze` of `spark-jupyter` and of the Worker environment and stops the run if any package installed in both differs.
 - Shared workspace `/opt/spark/shared-workspace`
 
 ```mermaid
@@ -706,6 +714,36 @@ The lab covers node/relationship creation and property-bearing relationship patt
 
 ---
 
+### AWS (local emulator)
+
+The AWS lab runs against a local emulator: **no AWS account, no credentials, no cost**. Nothing in this module can reach a real AWS account.
+
+| Component | Image | Host port | Role |
+|---|---|---|---|
+| `motoserver` | `motoserver/moto:5.2.4` | 5050 | S3, DynamoDB, IAM (AWS managed policies loaded), STS, Lambda |
+| `athena-gateway` | `labs-athena-gateway:1` (built from `aws/dockerfile.athena-gateway`) | 5051 | Athena `StartQueryExecution` / `GetQueryExecution` / `GetQueryResults` |
+| `athena-engine` | `apache/hive:4.0.1` (HiveServer2, embedded metastore, Tez local mode) | internal only | runs the Athena SQL, reading `s3://` through Hadoop's S3A connector |
+| `aws-terminal` | `labs-aws-terminal:1` (built from `aws/dockerfile.aws-terminal`) | none | the student's terminal: AWS CLI v2.36.17 plus boto3, pandas and Faker at the versions of `uv.lock`, already pointed at the emulator |
+
+- Students open the lab terminal with `docker exec -it aws-terminal bash`. It has dummy credentials and `AWS_ENDPOINT_URL` (Moto) / `AWS_ENDPOINT_URL_ATHENA` (gateway), which the AWS CLI v2 and boto3 honour, and it cannot see any `~/.aws` of your computer. Its `/workspace` is `aws/mount/workspace` on your computer, so lab files can be edited with any editor; on Linux and macOS it runs as your user so those files stay yours.
+- The AWS CLI v2 installer is the official `awscli-exe-linux-<arch>-2.36.17.zip`, checked against a pinned SHA-256 per architecture whose AWS CLI Team PGP signature was verified (key `FB5D B77F D5C1 18B8 0511 ADA8 A631 0ACC 4672 475C`).
+- `aws_infra` also writes `aws/mount/client/{config,credentials,aws-lab.env,aws-lab.ps1}` for host-side clients such as `aws_lab.ipynb`: they unset exported AWS keys, point `AWS_CONFIG_FILE` / `AWS_SHARED_CREDENTIALS_FILE` at dummy files and set the two endpoint variables.
+- Check before every lab: `aws sts get-caller-identity` must report account `123456789012` (Moto's fixed account). Any other account means you are not in the lab terminal: stop.
+- Lambda functions run for real: Moto starts each invocation in the pinned runtime image `ghcr.io/shogo82148/lambda-python@sha256:319b8cf1…` on `aws-network` and injects `AWS_ENDPOINT_URL`, so the function's own boto3 calls reach Moto. `aws_infra` pre-pulls the image.
+- The Athena gateway (`athena_gateway/`) passes SQL to HiveServer2 unchanged (Athena DDL is based in part on HiveQL DDL), writes result files to the query's S3 output location as `<QueryExecutionId>.csv` (DML) or `.txt` (DDL), and returns the column names as the first row of the first page of a SELECT. Queries run one at a time, in order.
+- Limits of the emulator, stated in the lab: Moto does not evaluate IAM policies (an unauthorised call still succeeds), and Athena-only syntax that Hive does not accept fails with Hive's message.
+- State lives in memory: recreating the stack is equivalent to a new, empty account.
+
+```mermaid
+flowchart LR
+    CLI["AWS CLI / boto3"] -->|":5050"| MOTO["motoserver"]
+    CLI -->|":5051"| GW["athena-gateway"]
+    GW --> ENG["athena-engine (HiveServer2)"]
+    ENG -->|"S3A"| MOTO
+    GW -->|"result files"| MOTO
+    MOTO -->|"docker.sock"| LAMBDA["Lambda runtime containers"]
+```
+
 ## Network modes
 
 All notebooks support exactly two lowercase execution modes. `local` is always the default; every other value is rejected. Docker/Compose is the cluster infrastructure in both modes, not a client network mode.
@@ -756,6 +794,7 @@ docker compose -f <name>.docker-compose.yml down -v
 
 - **Default credentials are course-local and public** (mongo `admin/admin`, neo4j `neo4j/password`, redis `redis/redis`, opensearch `admin/OpenSearchP455`, cassandra `cassandra/cassandra`). Do **not** expose these clusters to the public internet.
 - **Spark JupyterLab token** currently defaults to `""` (no auth) and is published on port 6888. Set `JUPYTER_LAB_TOKEN` to a strong value before exposing it beyond the VPN.
+- **The AWS emulator mounts the Docker socket** into `motoserver` so it can start Lambda containers; that grants root-equivalent control of Docker to that container. Its ports are published on `127.0.0.1` (Local) or the VPN address only.
 
 ---
 
@@ -767,16 +806,22 @@ docker compose -f <name>.docker-compose.yml down -v
 | VPN client hostname does not resolve | Missing/stale base record or wildcard service rule | Run `nslookup <VPN_CLIENT_ALIAS>.<VPN_DOMAIN> <VPN_DNS_IP>` and `nslookup opensearch-node-1.<VPN_CLIENT_ALIAS>.<VPN_DOMAIN> <VPN_DNS_IP>`; confirm both return `VPN_HOST_IP` |
 | Port already in use | Stale container / another module | `docker compose … down -v`, or set `START_FROM_SCRATCH=True` |
 | Hive/Tez errors | Tez not loaded in HDFS | Re-run the "Load dist-lib" cell in `hive_infra.ipynb` |
+| Spark notebook stops with "Run this notebook inside the spark-jupyter container" | It was opened in a Jupyter on your computer | Open JupyterLab at `http://127.0.0.1:6888` and run it there |
 | Spark jobs fail on workers | Missing venv-pack env | Re-run `spark_infra.ipynb` build cells (`spark-jupyter`, `spark-job-venv`) |
 | Cassandra cluster won't form | SSL/rackdc misconfig | Re-run cert-generation cells before start |
+| `aws sts get-caller-identity` shows an account other than `123456789012`, or asks for credentials | The command ran outside the lab terminal | Open it with `docker exec -it aws-terminal bash` and check again |
+| `attach-role-policy` fails with `NoSuchEntity` for an `arn:aws:iam::aws:policy/...` | Moto started without AWS managed policies | Re-run `aws_infra.ipynb` (it sets `MOTO_IAM_LOAD_MANAGED_POLICIES=true`) |
+| Athena query `FAILED` with a Hive `ParseException` | Syntax Hive does not accept (e.g. a trailing `;`) | Read `Status.StateChangeReason` from `get-query-execution` and fix the statement |
 
 ---
 
 ## Conventions & contributing
 
 - Notebook pairs: `<tech>_infra.ipynb` (deploy) + `<tech>_lab.ipynb` (learn).
-- The 17 `py:percent` `.py` sources are canonical. Force source-to-notebook refreshes with `uv run jupytext --to ipynb --update <source.py>`; do not use bidirectional `--sync` for this refresh.
+- The 19 `py:percent` `.py` sources are canonical. Force source-to-notebook refreshes with `uv run jupytext --to ipynb --update <source.py>`; do not use bidirectional `--sync` for this refresh.
 - Each notebook has exactly one papermill `parameters` cell. Run every infrastructure/lab pair completely in both Local and VPN modes before declaring acceptance; Hive and Spark also require healthy Hadoop infrastructure.
 - Constants live at the top of each notebook; compose files are generated, not committed.
+- Every code cell is explained by the markdown cell right before it: a numbered `## ` heading, then **What** (what the cell does), **Why** (why the step is needed) and **How** (the mechanism, with exact names and values), and optionally `📄` links to official documentation whose page states the fact cited.
+- Structural audit and tests: `uv run python -m labs_audit` checks every notebook pair (one `parameters` cell with the documented defaults, the `non-relational-dbs-labs` kernel, no saved outputs, `.ipynb` identical to its `.py`, no IPython `!` shell lines, text I/O with explicit `encoding=` and, on writes, `newline=`, no `shell=True`, no Windows-only paths, every code cell preceded by a markdown cell with a `## ` heading and **What / Why / How** bullets, every markdown link an `https://` URL) and the eight Spark JAR checksums. Notebooks run commands with `labs_runtime.run_command([...])`, an argument list that reaches the program unchanged on every operating system. `uv run pytest` runs `tests/{unit,component,e2e}` with 100 % branch coverage of `labs_audit`, `athena_gateway`, `labs_runtime` and `labs_parity` (the e2e tier also runs `python -m athena_gateway` as a process, measured through coverage's subprocess patch); `LABS_LIVE=1 uv run pytest tests/live` also executes every infrastructure/lab pair in Local mode with papermill, and `LABS_LINKS=1 uv run pytest tests/live/test_notebook_links.py` checks that every notebook link answers HTTP 200.
 - Credentials are course-local defaults (documented above) — not for production use.
 - Student homework notebooks are intentionally **not** in this repository (they live in the course's internal grading repo).

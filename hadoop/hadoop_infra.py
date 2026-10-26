@@ -13,8 +13,14 @@
 # ---
 
 # %% [markdown]
-# # Setup
+# # Hadoop — infrastructure (HDFS + YARN)
 #
+# ## 1. Parameters
+#
+# - **What:** default values for `NETWORK_MODE`, the VPN identity and `START_FROM_SCRATCH`.
+# - **Why:** the same notebook serves Local mode (ports on `127.0.0.1`) and VPN mode (`<container>.<alias>.<domain>`).
+# - **How:** the cell is tagged `parameters`; papermill inserts an `injected-parameters` cell right after it with the `-p` values.
+# - 📄 [papermill — Parameterize](https://papermill.readthedocs.io/en/latest/usage-parameterize.html)
 
 # %% tags=["parameters"]
 # Local mode is the portable default; VPN mode publishes services on this host.
@@ -26,7 +32,11 @@ VPN_CLIENT_ALIAS = "mavasbel"
 START_FROM_SCRATCH = False
 
 # %% [markdown]
-# Validates and normalizes the injected parameters: lowercases NETWORK_MODE and VPN_CLIENT_ALIAS, rejects unsupported network modes and malformed aliases, and derives VPN_CLIENT_DOMAIN from them.
+# ## 2. Validate the parameters
+#
+# - **What:** lower-cases `NETWORK_MODE` and `VPN_CLIENT_ALIAS` and builds `VPN_CLIENT_DOMAIN = <alias>.<domain>`.
+# - **Why:** a wrong value must stop the notebook here, before any container changes.
+# - **How:** rejects any mode other than `local`/`vpn` and, in VPN mode, a host IP outside `10.15.20.*`, and an alias that is not lower-case letters, digits and inner hyphens.
 
 # %%
 NETWORK_MODE = NETWORK_MODE.strip().lower()
@@ -48,7 +58,11 @@ if (
 VPN_CLIENT_DOMAIN = f"{VPN_CLIENT_ALIAS}.{VPN_DOMAIN}"
 
 # %% [markdown]
-# Walks up the directory tree from the current working directory to locate the labs-setup root (identified by pyproject.toml plus the cassandra and mongodb module folders), then changes into the hadoop module directory.
+# ## 3. Find the module folder
+#
+# - **What:** locates the labs-setup root, changes into `hadoop/` and imports `run_command`.
+# - **Why:** relative paths (Compose file, `mount/`) then resolve the same way whether papermill or JupyterLab started the kernel; `run_command` passes an argument list to the program without a shell, so it behaves the same on Windows, macOS and Linux.
+# - **How:** walks up from the current folder to the first one holding `pyproject.toml`, `cassandra/` and `mongodb/`.
 
 # %%
 # Resolve module assets from the labs-setup root.
@@ -71,14 +85,30 @@ if LABS_ROOT is None:
         "Could not find the labs-setup root from the current directory"
     )
 MODULE_DIR = LABS_ROOT / "hadoop"
+import sys
+
+if str(LABS_ROOT) not in sys.path:
+    sys.path.insert(0, str(LABS_ROOT))
+from labs_runtime import run_command
+
 os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
 # %% [markdown]
-# Defines the full Hadoop cluster topology: NameNode, ResourceManager, DataNode, and NodeManager hostnames, compose-network aliases, client IPs, RPC and Web UI ports, replication factor, worker counts, and HDFS storage directories for both local and VPN modes.
+# ## 4. Cluster topology
+#
+# - **What:** names, host names and ports of the NameNode (`8020`, UI `9870`), the ResourceManager (`8088` and `8030-8033`, job history `10020`/`19888`), two DataNodes and two NodeManagers; replication factor `2`; image `apache/hadoop:3.4.3`.
+# - **Why:** every daemon publishes on the same host, so each worker gets its own ports (`+10` per worker); clients use `127.0.0.1` (Local) or `<container>.<alias>.<domain>` (VPN).
+# - **How:** DataNodes advertise `datanode-N.lvh.me` in Local mode (a public name that resolves to `127.0.0.1`) and their VPN name in VPN mode; the image is declared `linux/amd64`, the only platform it is published for, so Apple Silicon runs it under emulation.
+# - 📄 [HDFS architecture (replication)](https://hadoop.apache.org/docs/r3.4.3/hadoop-project-dist/hadoop-hdfs/HdfsDesign.html)
 
 # %%
 HADOOP_START_FROM_SCRATCH = START_FROM_SCRATCH
+HADOOP_IMAGE = "apache/hadoop:3.4.3"
+# apache/hadoop is published for linux/amd64 only; declaring it makes Apple
+# Silicon hosts run it under Docker Desktop's emulation instead of failing to
+# find a matching image.
+HADOOP_PLATFORM = "linux/amd64"
 DOCKER_INTERNAL_HOST = "host.docker.internal"
 DOCKER_DNS = [VPN_DNS_IP] if NETWORK_MODE == "vpn" else []
 HOST_BIND_IP = VPN_HOST_IP if NETWORK_MODE == "vpn" else "127.0.0.1"
@@ -171,7 +201,12 @@ HADOOP_DATANODE_DATADIR = "/opt/hadoop/dfs/data"
 HADOOP_HDFS_DATADIR = "/opt/hadoop/work-dir"
 
 # %% [markdown]
-# Creates the local bind-mount directory (DOCKER_MOUNTDIR) under the hadoop module folder that will hold persistent state for every Hadoop container.
+# ## 5. Host folder
+#
+# - **What:** creates `mount/`, which will hold every daemon's state.
+# - **Why:** HDFS metadata and blocks survive a container restart.
+# - **How:** path built from `MODULE_DIR`.
+# - 📄 [Docker — Bind mounts](https://docs.docker.com/engine/storage/bind-mounts/)
 
 # %%
 import os
@@ -183,8 +218,12 @@ DOCKER_MOUNTDIR = os.path.join(LOCALHOST_WORKDIR, "mount")
 Path(DOCKER_MOUNTDIR).mkdir(parents=True, exist_ok=True)
 
 # %% [markdown]
-# # Stop hadoop-cluster.docker-compose.yml
+# ## 6. Stop the previous cluster
 #
+# - **What:** with `START_FROM_SCRATCH=True`, removes the containers, network and volumes.
+# - **Why:** a fresh build must not reuse an old NameNode; with `False` the running cluster is kept.
+# - **How:** `docker compose -f hadoop-cluster.docker-compose.yml down -v` (`check=False`).
+# - 📄 [docker compose down](https://docs.docker.com/reference/cli/docker/compose/down/)
 
 # %%
 import subprocess
@@ -199,8 +238,12 @@ else:
 
 
 # %% [markdown]
-# # Delete prev mountpoints
+# ## 7. Delete the old state and create the mount folders
 #
+# - **What:** with `START_FROM_SCRATCH=True`, empties `mount/`; then creates every daemon's `work-dir` / `name-dir` / `data-dir`.
+# - **Why:** files written by the containers may not be deletable by the host user, and Docker would create a missing bind source as root, which the next reset could not remove.
+# - **How:** `rm -rf` runs as root inside a throwaway `busybox:1.36` container; the folders are then created by the notebook itself.
+# - 📄 [docker container run](https://docs.docker.com/reference/cli/docker/container/run/) · [Docker — Bind mounts](https://docs.docker.com/engine/storage/bind-mounts/)
 
 # %%
 def clear_bind_directory(path):
@@ -219,9 +262,26 @@ def clear_bind_directory(path):
 if HADOOP_START_FROM_SCRATCH:
     clear_bind_directory(DOCKER_MOUNTDIR)
 
+# Docker otherwise creates a missing bind-mount source directory as root.  Create
+# each source ourselves so the next scratch reset can remove the state without a
+# host-side ownership repair.
+HADOOP_BIND_MOUNT_DIRECTORIES = (
+    "namenode/work-dir",
+    "namenode/name-dir",
+    "resourcemanager/work-dir",
+    *(f"{name}/work-dir" for name in HADOOP_DATANODE_NAMES),
+    *(f"{name}/data-dir" for name in HADOOP_DATANODE_NAMES),
+    *(f"{name}/work-dir" for name in HADOOP_NODEMANAGER_NAMES),
+)
+for relative_path in HADOOP_BIND_MOUNT_DIRECTORIES:
+    (Path(DOCKER_MOUNTDIR) / relative_path).mkdir(parents=True, exist_ok=True)
+
 # %% [markdown]
-# # Auxiliary function
+# ## 8. Memory helper
 #
+# - **What:** defines `extract_mb`, which turns values such as `512`, `2G` or `-Xmx512m` into megabytes.
+# - **Why:** the container memory limits are computed from the heap settings in the next cell.
+# - **How:** a regular expression reads the number and its `K`/`M`/`G` unit; no unit means megabytes.
 
 # %%
 import re
@@ -257,8 +317,12 @@ def extract_mb(val_str):
 
 
 # %% [markdown]
-# # Create hadoop-cluster.docker-compose.yml
+# ## 9. Hadoop configuration and Compose file
 #
+# - **What:** builds the Hadoop settings and generates `hadoop-cluster.docker-compose.yml` with the NameNode, the ResourceManager (plus the job history server) and the two DataNode / NodeManager pairs.
+# - **Why:** one set of settings is shared by every daemon; the memory limits leave room for each JVM so the kernel does not kill a daemon (the ResourceManager also hosts the `hadoop jar` client JVMs).
+# - **How:** the image turns variables named `CORE-SITE.XML_<key>`, `HDFS-SITE.XML_<key>`, `YARN-SITE.XML_<key>` and `MAPRED-SITE.XML_<key>` into those XML files. Key settings: `fs.defaultFS=hdfs://namenode:8020`, `dfs.replication=2`, `dfs.datanode.use.datanode.hostname` and `dfs.client.use.datanode.hostname` set to `true` (clients reach each DataNode by its name, not by its internal Docker IP), YARN with 1792 MB and 2 vcores per NodeManager, MapReduce on YARN. The NameNode formats its folder only the first time.
+# - 📄 [apache/hadoop image — envtoconf.py](https://raw.githubusercontent.com/apache/hadoop/docker-hadoop-runner-latest/scripts/envtoconf.py) · [core-default.xml](https://hadoop.apache.org/docs/r3.4.3/hadoop-project-dist/hadoop-common/core-default.xml) · [hdfs-default.xml](https://hadoop.apache.org/docs/r3.4.3/hadoop-project-dist/hadoop-hdfs/hdfs-default.xml) · [HDFS — Multihomed networks](https://hadoop.apache.org/docs/r3.4.3/hadoop-project-dist/hadoop-hdfs/HdfsMultihoming.html) · [yarn-default.xml](https://hadoop.apache.org/docs/r3.4.3/hadoop-yarn/hadoop-yarn-common/yarn-default.xml) · [mapred-default.xml](https://hadoop.apache.org/docs/r3.4.3/hadoop-mapreduce-client/hadoop-mapreduce-client-core/mapred-default.xml)
 
 # %%
 import os
@@ -321,6 +385,7 @@ env_content = {
     "HDFS-SITE.XML_dfs.namenode.datanode.registration.ip-hostname-check": "false",  # Para que no intente resolucion DNS inversa
     "HDFS-SITE.XML_dfs.datanode.data.dir": HADOOP_DATANODE_DATADIR,
     "HDFS-SITE.XML_dfs.datanode.use.datanode.hostname": "true",
+    "HDFS-SITE.XML_dfs.client.use.datanode.hostname": "true",  # El cliente escribe a cada DataNode por su nombre (alias de la red o, en VPN, el publicado), no por su IP interna de Docker
     # [NUEVOS PARÁMETROS HDFS]
     "HDFS-SITE.XML_dfs.blocksize": "134217728",  # Tamaño de bloque en bytes (134217728 = 128 MB)
     "HDFS-SITE.XML_dfs.namenode.handler.count": "20",  # Número de hilos del NameNode para peticiones
@@ -383,7 +448,11 @@ yarn_nodemanager_vault = extract_mb(
 # Limit = Memoria del Demonio + Overhead
 NAMENODE_DOCKER_LIMIT = f"{namenode_heap + DOCKER_OVERHEAD_MB}M"
 DATANODE_DOCKER_LIMIT = f"{datanode_heap + DOCKER_OVERHEAD_MB}M"
-RESOURCEMANAGER_DOCKER_LIMIT = f"{yarn_heap + DOCKER_OVERHEAD_MB}M"
+# Jobs are submitted with `docker exec resourcemanager hadoop jar ...`, so each
+# client JVM (heap up to HADOOP_HEAPSIZE_MAX) shares the container with the
+# ResourceManager. Without that allowance the kernel OOM-killed the
+# ResourceManager after 22 streaming jobs (measured 2026-10-09).
+RESOURCEMANAGER_DOCKER_LIMIT = f"{yarn_heap + global_heap + 2 * DOCKER_OVERHEAD_MB}M"
 NODEMANAGER_DOCKER_LIMIT = f"{yarn_heap + yarn_nodemanager_vault + DOCKER_OVERHEAD_MB}M"  # El NodeManager es la suma (Memoria del Demonio + Memoria para Trabajos + Overhead)
 
 hadoop_compose_file_name = "hadoop-cluster.docker-compose.yml"
@@ -403,7 +472,8 @@ hadoop_compose_dict = {
     },
     "services": {
         "namenode": {
-            "image": "apache/hadoop:3.4.3",
+            "image": HADOOP_IMAGE,
+            "platform": HADOOP_PLATFORM,
             "container_name": "namenode",
             "command": [
                 "bash",
@@ -462,7 +532,8 @@ hadoop_compose_dict = {
             },
         },
         "resourcemanager": {
-            "image": "apache/hadoop:3.4.3",
+            "image": HADOOP_IMAGE,
+            "platform": HADOOP_PLATFORM,
             "container_name": "resourcemanager",
             "command": [
                 "bash",
@@ -536,7 +607,8 @@ for i in range(0, HADOOP_NUM_WORKERS):
 
     # Programmatically add DataNodes
     hadoop_compose_dict["services"][HADOOP_DATANODE_NAMES[i]] = {
-        "image": "apache/hadoop:3.4.3",
+        "image": HADOOP_IMAGE,
+        "platform": HADOOP_PLATFORM,
         "container_name": HADOOP_DATANODE_NAMES[i],
         "command": [
             "bash",
@@ -599,7 +671,8 @@ for i in range(0, HADOOP_NUM_WORKERS):
 
     # Programmatically add NodeManagers
     hadoop_compose_dict["services"][HADOOP_NODEMANAGER_NAMES[i]] = {
-        "image": "apache/hadoop:3.4.3",
+        "image": HADOOP_IMAGE,
+        "platform": HADOOP_PLATFORM,
         "container_name": HADOOP_NODEMANAGER_NAMES[i],
         "command": [
             "bash",
@@ -684,7 +757,8 @@ hadoop_compose_yaml_contents = yaml.dump(
     hadoop_compose_dict, default_flow_style=False, sort_keys=False, indent=4
 )
 with open(
-    os.path.join(LOCALHOST_WORKDIR, hadoop_compose_file_name), "w"
+    os.path.join(LOCALHOST_WORKDIR, hadoop_compose_file_name), "w",
+    encoding="utf-8", newline="\n",
 ) as hadoop_compose_file:
     hadoop_compose_file.write(hadoop_compose_yaml_contents)
 print(
@@ -693,8 +767,39 @@ print(
 display(Markdown(f"```yaml\n{hadoop_compose_yaml_contents}\n```"))
 
 # %% [markdown]
-# # Start hadoop-cluster.docker-compose.yml
+# ## 10. Start Hadoop
 #
+# - **What:** starts the cluster and waits until the NameNode and ResourceManager health checks pass.
+# - **Why:** the DataNodes and NodeManagers start only after the NameNode (and ResourceManager) are healthy.
+# - **How:** `docker compose up -d --wait`; the health checks open the web UI ports `9870` and `8088`.
+# - 📄 [docker compose up](https://docs.docker.com/reference/cli/docker/compose/up/) · [Hadoop cluster setup](https://hadoop.apache.org/docs/r3.4.3/hadoop-project-dist/hadoop-common/ClusterSetup.html)
 
 # %%
-# !docker compose -f hadoop-cluster.docker-compose.yml up -d --wait
+run_command(["docker", "compose", "-f", "hadoop-cluster.docker-compose.yml", "up", "-d", "--wait"])
+
+# %% [markdown]
+# ## 11. Wait for the NodeManagers
+#
+# - **What:** waits up to 300 s until YARN reports 2 active NodeManagers.
+# - **Why:** NodeManagers have no health check, so `--wait` can return before they register; a job submitted then would wait for capacity.
+# - **How:** polls `GET /ws/v1/cluster/metrics` every 5 s and reads `activeNodes`.
+# - 📄 [ResourceManager REST API](https://hadoop.apache.org/docs/r3.4.3/hadoop-yarn/hadoop-yarn-site/ResourceManagerRest.html)
+
+# %%
+import time
+
+import requests
+
+yarn_metrics_url = f"http://{HOST_BIND_IP}:{HADOOP_RESOURCEMANAGER_WEBUI_PORT}/ws/v1/cluster/metrics"
+deadline = time.monotonic() + 300
+active_nodes = None
+while time.monotonic() < deadline:
+    try:
+        active_nodes = requests.get(yarn_metrics_url, timeout=10).json()["clusterMetrics"]["activeNodes"]
+    except (requests.RequestException, KeyError, ValueError):
+        active_nodes = None
+    if active_nodes == HADOOP_NUM_WORKERS:
+        break
+    time.sleep(5)
+assert active_nodes == HADOOP_NUM_WORKERS, f"YARN active NodeManagers: {active_nodes}, expected {HADOOP_NUM_WORKERS}"
+print(f"✅ YARN reports {active_nodes} active NodeManagers")

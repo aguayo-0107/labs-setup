@@ -1,0 +1,555 @@
+# ---
+# jupyter:
+#   jupytext:
+#     text_representation:
+#       extension: .py
+#       format_name: percent
+#       format_version: '1.3'
+#       jupytext_version: 1.19.5
+#   kernelspec:
+#     display_name: non-relational-dbs-labs
+#     language: python
+#     name: non-relational-dbs-labs
+# ---
+
+# %% [markdown]
+# # AWS lab — local infrastructure (no AWS account, no cost)
+#
+# Moto emulates S3, DynamoDB, IAM, STS and Lambda (each function runs in a real Lambda runtime container), and an Athena-compatible gateway runs Athena queries on its own HiveServer2 engine, which reads the data from Moto's S3.
+#
+# ## 1. Parameters
+#
+# - **What:** default values for `NETWORK_MODE`, the VPN identity and `START_FROM_SCRATCH`.
+# - **Why:** the same notebook serves Local mode (ports on `127.0.0.1`) and VPN mode (`<container>.<alias>.<domain>`).
+# - **How:** the cell is tagged `parameters`; papermill inserts an `injected-parameters` cell right after it with the `-p` values.
+# - 📄 [papermill — Parameterize](https://papermill.readthedocs.io/en/latest/usage-parameterize.html)
+
+# %% tags=["parameters"]
+# Local mode is the portable default; VPN mode publishes services on this host.
+NETWORK_MODE = "local"
+VPN_HOST_IP = "10.15.20.100"
+VPN_DNS_IP = "10.15.20.1"
+VPN_DOMAIN = "vpn.itam.mx"
+VPN_CLIENT_ALIAS = "mavasbel"
+START_FROM_SCRATCH = False
+
+# %% [markdown]
+# ## 2. Validate the parameters
+#
+# - **What:** lower-cases `NETWORK_MODE` and `VPN_CLIENT_ALIAS` and builds `VPN_CLIENT_DOMAIN = <alias>.<domain>`.
+# - **Why:** a wrong value must stop the notebook here, before any container changes.
+# - **How:** rejects any mode other than `local`/`vpn` and, in VPN mode, a host IP outside `10.15.20.*`, and an alias that is not lower-case letters, digits and inner hyphens.
+
+# %%
+import re
+
+NETWORK_MODE = NETWORK_MODE.strip().lower()
+if NETWORK_MODE not in {"local", "vpn"}:
+    raise ValueError("NETWORK_MODE must be 'local' or 'vpn'")
+if NETWORK_MODE == "vpn" and not VPN_HOST_IP.startswith("10.15.20."):
+    raise ValueError("VPN_HOST_IP must be in the 10.15.20.* subnet")
+VPN_CLIENT_ALIAS = VPN_CLIENT_ALIAS.strip().lower()
+if not VPN_CLIENT_ALIAS:
+    raise ValueError("VPN_CLIENT_ALIAS must not be empty")
+if re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", VPN_CLIENT_ALIAS) is None:
+    raise ValueError(
+        "VPN_CLIENT_ALIAS must contain only lowercase letters, digits, or hyphens "
+        "and must not start or end with a hyphen"
+    )
+VPN_CLIENT_DOMAIN = f"{VPN_CLIENT_ALIAS}.{VPN_DOMAIN}"
+
+# %% [markdown]
+# ## 3. Find the module folder
+#
+# - **What:** locates the labs-setup root, changes into `aws/` and imports `run_command`.
+# - **Why:** relative paths (Compose file, `mount/`) then resolve the same way whether papermill or JupyterLab started the kernel; `run_command` passes an argument list to the program without a shell, so it behaves the same on Windows, macOS and Linux.
+# - **How:** walks up from the current folder to the first one holding `pyproject.toml`, `cassandra/` and `mongodb/`.
+
+# %%
+import os
+from pathlib import Path
+
+_start = Path.cwd().resolve()
+LABS_ROOT = next(
+    (
+        candidate
+        for candidate in (_start, *_start.parents)
+        if (candidate / "pyproject.toml").is_file()
+        and (candidate / "cassandra").is_dir()
+        and (candidate / "mongodb").is_dir()
+    ),
+    None,
+)
+if LABS_ROOT is None:
+    raise RuntimeError("Could not find the labs-setup root from the current directory")
+MODULE_DIR = LABS_ROOT / "aws"
+import sys
+
+if str(LABS_ROOT) not in sys.path:
+    sys.path.insert(0, str(LABS_ROOT))
+from labs_runtime import run_command
+
+os.chdir(MODULE_DIR)
+print(f"Working directory: {MODULE_DIR}")
+
+# %% [markdown]
+# ## 4. Services and endpoints
+#
+# - **What:** names, pinned images and ports: Moto `5.2.4` on host port `5050`, the Athena gateway on `5051`, the internal `apache/hive:4.0.1` engine and `aws-terminal`, the student's terminal; region `us-east-1`, keys `test`/`test`.
+# - **Why:** nothing here can reach a real AWS account: the keys are dummies and Moto always answers as account `123456789012`.
+# - **How:** clients use `127.0.0.1` (Local) or `<container>.<alias>.<domain>` (VPN); the Lambda runtime image is pinned by digest because its tag is rebuilt upstream.
+# - 📄 [Moto 5.2.4 — Server mode](https://docs.getmoto.org/en/5.2.4/docs/server_mode.html)
+
+# %%
+AWS_START_FROM_SCRATCH = START_FROM_SCRATCH
+DOCKER_DNS = [VPN_DNS_IP] if NETWORK_MODE == "vpn" else []
+HOST_BIND_IP = VPN_HOST_IP if NETWORK_MODE == "vpn" else "127.0.0.1"
+
+
+def vpn_fqdn(container_name):
+    return f"{container_name}.{VPN_CLIENT_DOMAIN}"
+
+
+def client_host(container_name):
+    return "127.0.0.1" if NETWORK_MODE == "local" else vpn_fqdn(container_name)
+
+
+AWS_NETWORK_NAME = "aws-network"
+AWS_REGION = "us-east-1"
+AWS_DUMMY_KEY_ID = "test"
+AWS_DUMMY_SECRET = "test"
+MOTO_ACCOUNT_ID = "123456789012"
+
+MOTO_CONTAINER_NAME = "motoserver"
+MOTO_IMAGE = "motoserver/moto:5.2.4"
+MOTO_INTERNAL_PORT = 5000
+MOTO_EXTERNAL_PORT = 5050
+LAMBDA_RUNTIME_IMAGE = (
+    "ghcr.io/shogo82148/lambda-python"
+    "@sha256:319b8cf1e9f03a32d89d82acba66a9927edb6cde21910734cc2f0bdd470198e4"
+)
+
+ATHENA_ENGINE_CONTAINER_NAME = "athena-engine"
+ATHENA_ENGINE_IMAGE = "apache/hive:4.0.1"
+ATHENA_ENGINE_PORT = 10000
+
+ATHENA_GATEWAY_CONTAINER_NAME = "athena-gateway"
+ATHENA_GATEWAY_IMAGE = "labs-athena-gateway:1"
+ATHENA_GATEWAY_INTERNAL_PORT = 8080
+ATHENA_GATEWAY_EXTERNAL_PORT = 5051
+
+AWS_TERMINAL_CONTAINER_NAME = "aws-terminal"
+AWS_TERMINAL_IMAGE = "labs-aws-terminal:1"
+AWS_TERMINAL_WORKDIR = "/workspace"
+
+MOTO_CLIENT_URL = f"http://{client_host(MOTO_CONTAINER_NAME)}:{MOTO_EXTERNAL_PORT}"
+ATHENA_CLIENT_URL = f"http://{client_host(ATHENA_GATEWAY_CONTAINER_NAME)}:{ATHENA_GATEWAY_EXTERNAL_PORT}"
+MOTO_INTERNAL_URL = f"http://{MOTO_CONTAINER_NAME}:{MOTO_INTERNAL_PORT}"
+ATHENA_INTERNAL_URL = f"http://{ATHENA_GATEWAY_CONTAINER_NAME}:{ATHENA_GATEWAY_INTERNAL_PORT}"
+print(f"Moto: {MOTO_CLIENT_URL} | Athena: {ATHENA_CLIENT_URL}")
+
+# %% [markdown]
+# ## 5. Host folders
+#
+# - **What:** creates `mount/`; `mount/workspace` will be the student's `/workspace` in `aws-terminal`.
+# - **Why:** the engine configuration, the client files and the student's files live on the host.
+# - **How:** paths built from `MODULE_DIR`.
+# - 📄 [Docker — Bind mounts](https://docs.docker.com/engine/storage/bind-mounts/)
+
+# %%
+LOCALHOST_WORKDIR = str(MODULE_DIR.resolve())
+DOCKER_MOUNTDIR = os.path.join(LOCALHOST_WORKDIR, "mount")
+Path(DOCKER_MOUNTDIR).mkdir(parents=True, exist_ok=True)
+AWS_TERMINAL_HOST_DIR = Path(DOCKER_MOUNTDIR) / "workspace"
+
+# %% [markdown]
+# ## 6. Stop the previous stack
+#
+# - **What:** with `START_FROM_SCRATCH=True`, removes the containers, network and volumes.
+# - **Why:** a fresh build must not reuse old state; with `False` the running stack is kept.
+# - **How:** `docker compose -f aws-cluster.docker-compose.yml down -v` (`check=False`).
+# - 📄 [docker compose down](https://docs.docker.com/reference/cli/docker/compose/down/)
+
+# %%
+import subprocess
+
+if AWS_START_FROM_SCRATCH:
+    subprocess.run(
+        ["docker", "compose", "-f", "aws-cluster.docker-compose.yml", "down", "-v"],
+        check=False,
+    )
+else:
+    print("Preserving existing containers and volumes")
+
+
+# %% [markdown]
+# ## 7. Delete the old state
+#
+# - **What:** with `START_FROM_SCRATCH=True`, empties `mount/`.
+# - **Why:** files written by containers may not be deletable by the host user.
+# - **How:** `rm -rf` runs as root inside a throwaway `busybox:1.36` container that sees `mount/` as `/target`.
+# - 📄 [docker container run](https://docs.docker.com/reference/cli/docker/container/run/)
+
+# %%
+def clear_bind_directory(path):
+    target = Path(path).resolve()
+    target.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "docker", "run", "--rm", "--mount",
+            f"type=bind,source={target},target=/target",
+            "busybox:1.36", "sh", "-c",
+            "find /target -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +",
+        ],
+        check=True,
+    )
+
+
+if AWS_START_FROM_SCRATCH:
+    clear_bind_directory(DOCKER_MOUNTDIR)
+
+# %% [markdown]
+# ## 8. Engine S3 configuration
+#
+# - **What:** writes `core-site.xml` for the Athena engine.
+# - **Why:** Athena tables live at `s3://` paths; the engine must read them from Moto, not from AWS.
+# - **How:** the `s3://` scheme is served by Hadoop's S3A connector pointed at `http://motoserver:5000`, path-style, without TLS, with the dummy keys. The connector ships inside the Hive image (enabled later with `HADOOP_OPTIONAL_TOOLS=hadoop-aws`); nothing is downloaded.
+# - 📄 [Hadoop 3.3.6 — S3A connector](https://hadoop.apache.org/docs/r3.3.6/hadoop-aws/tools/hadoop-aws/index.html)
+
+# %%
+ENGINE_CONF_DIR = Path(DOCKER_MOUNTDIR) / ATHENA_ENGINE_CONTAINER_NAME
+ENGINE_CONF_DIR.mkdir(parents=True, exist_ok=True)
+(ENGINE_CONF_DIR / "core-site.xml").write_text(
+    f"""<?xml version="1.0"?>
+<configuration>
+    <property><name>fs.s3.impl</name><value>org.apache.hadoop.fs.s3a.S3AFileSystem</value></property>
+    <property><name>fs.s3a.endpoint</name><value>{MOTO_INTERNAL_URL}</value></property>
+    <property><name>fs.s3a.endpoint.region</name><value>{AWS_REGION}</value></property>
+    <property><name>fs.s3a.path.style.access</name><value>true</value></property>
+    <property><name>fs.s3a.connection.ssl.enabled</name><value>false</value></property>
+    <property><name>fs.s3a.access.key</name><value>{AWS_DUMMY_KEY_ID}</value></property>
+    <property><name>fs.s3a.secret.key</name><value>{AWS_DUMMY_SECRET}</value></property>
+</configuration>
+""",
+    encoding="utf-8",
+    newline="\n",
+)
+print(f"Wrote {ENGINE_CONF_DIR / 'core-site.xml'}")
+
+# %% [markdown]
+# ## 9. Client configuration
+#
+# - **What:** writes `mount/client/config`, `credentials` and the scripts `aws-lab.env` (Bash) and `aws-lab.ps1` (PowerShell).
+# - **Why:** a host-side AWS CLI or boto3 must use the lab endpoints and never a real `~/.aws` profile.
+# - **How:** the scripts unset any real keys, point `AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE` at these files, and set `AWS_ENDPOINT_URL` (Moto) and `AWS_ENDPOINT_URL_ATHENA` (the gateway).
+# - 📄 [AWS CLI — Config and credentials files](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html) · [AWS CLI — Environment variables](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html) · [AWS SDKs — Service-specific endpoints](https://docs.aws.amazon.com/sdkref/latest/guide/feature-ss-endpoints.html) · [Endpoint variable per service](https://docs.aws.amazon.com/sdkref/latest/guide/ss-endpoints-table.html)
+
+# %%
+CLIENT_DIR = Path(DOCKER_MOUNTDIR) / "client"
+CLIENT_DIR.mkdir(parents=True, exist_ok=True)
+CLIENT_CONFIG = CLIENT_DIR / "config"
+CLIENT_CREDENTIALS = CLIENT_DIR / "credentials"
+CLIENT_CONFIG.write_text(f"[default]\nregion = {AWS_REGION}\noutput = json\n", encoding="utf-8", newline="\n")
+CLIENT_CREDENTIALS.write_text(
+    f"[default]\naws_access_key_id = {AWS_DUMMY_KEY_ID}\naws_secret_access_key = {AWS_DUMMY_SECRET}\n",
+    encoding="utf-8",
+    newline="\n",
+)
+CLIENT_ENV = {
+    "AWS_CONFIG_FILE": str(CLIENT_CONFIG),
+    "AWS_SHARED_CREDENTIALS_FILE": str(CLIENT_CREDENTIALS),
+    "AWS_PROFILE": "default",
+    "AWS_DEFAULT_REGION": AWS_REGION,
+    "AWS_ENDPOINT_URL": MOTO_CLIENT_URL,
+    "AWS_ENDPOINT_URL_ATHENA": ATHENA_CLIENT_URL,
+}
+UNSET = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")
+(CLIENT_DIR / "aws-lab.env").write_text(
+    "".join(f"unset {name}\n" for name in UNSET)
+    + "".join(f"export {name}='{value}'\n" for name, value in CLIENT_ENV.items()),
+    encoding="utf-8",
+    newline="\n",
+)
+(CLIENT_DIR / "aws-lab.ps1").write_text(
+    "".join(f"Remove-Item Env:{name} -ErrorAction SilentlyContinue\n" for name in UNSET)
+    + "".join(f"$env:{name} = '{value}'\n" for name, value in CLIENT_ENV.items()),
+    encoding="utf-8",
+    newline="\n",
+)
+print((CLIENT_DIR / "aws-lab.env").read_text(encoding="utf-8"))
+
+# %% [markdown]
+# ## 10. Pull the Lambda runtime
+#
+# - **What:** downloads the pinned Lambda runtime image now.
+# - **Why:** the first `aws lambda invoke` would otherwise wait for this download.
+# - **How:** `docker pull -q <image>@sha256:...`.
+# - 📄 [docker image pull](https://docs.docker.com/reference/cli/docker/image/pull/) · [Moto — Lambda (Docker options)](https://docs.getmoto.org/en/5.2.4/docs/services/lambda.html)
+
+# %%
+pull = subprocess.run(["docker", "pull", "-q", LAMBDA_RUNTIME_IMAGE], capture_output=True, text=True, encoding="utf-8")
+print(pull.stdout.strip())
+assert pull.returncode == 0, pull.stderr
+
+# %% [markdown]
+# ## 11. Write the Compose file
+#
+# - **What:** generates `aws-cluster.docker-compose.yml` with `motoserver`, `athena-engine`, `athena-gateway` and `aws-terminal` on `aws-network`.
+# - **Why:** each Lambda invocation runs as a sibling container that must reach Moto; a dotted VPN host name must not be read as `<bucket>.<endpoint>`.
+# - **How:** Moto gets the Docker socket, `MOTO_DOCKER_NETWORK_NAME`, `MOTO_DOCKER_LAMBDA_IMAGE`, `MOTO_IAM_LOAD_MANAGED_POLICIES=true` (AWS managed policies such as `AmazonDynamoDBFullAccess` exist) and `MOTO_S3_CUSTOM_ENDPOINTS`; the engine runs `SERVICE_NAME=hiveserver2`; the terminal runs as the host user on Linux and macOS so its files stay editable. Start order follows the health checks.
+# - 📄 [Moto — Lambda (Docker options)](https://docs.getmoto.org/en/5.2.4/docs/services/lambda.html) · [Moto 5.2.4 — settings.py (`MOTO_IAM_LOAD_MANAGED_POLICIES`)](https://raw.githubusercontent.com/getmoto/moto/5.2.4/moto/settings.py) · [Moto — S3 custom endpoints](https://docs.getmoto.org/en/5.2.4/docs/services/s3.html) · [Hive — Docker quickstart](https://hive.apache.org/development/quickstart/) · [Compose file — services](https://docs.docker.com/reference/compose-file/services/)
+
+# %%
+import yaml
+from IPython.display import Markdown, display
+
+aws_compose_dict = {
+    "name": "aws-cluster",
+    "services": {
+        MOTO_CONTAINER_NAME: {
+            "image": MOTO_IMAGE,
+            "container_name": MOTO_CONTAINER_NAME,
+            "environment": {
+                "MOTO_PORT": str(MOTO_INTERNAL_PORT),
+                # Lambda containers join this network and reach Moto by its IP on it.
+                "MOTO_DOCKER_NETWORK_NAME": AWS_NETWORK_NAME,
+                "MOTO_DOCKER_LAMBDA_IMAGE": LAMBDA_RUNTIME_IMAGE,
+                # AWS managed policies (e.g. AmazonDynamoDBFullAccess) are bundled
+                # with Moto but only loaded on request.
+                "MOTO_IAM_LOAD_MANAGED_POLICIES": "true",
+                # Moto reads a dotted host name (the VPN client name) as
+                # <bucket>.<endpoint>; declaring the client endpoint keeps path-style buckets.
+                "MOTO_S3_CUSTOM_ENDPOINTS": MOTO_CLIENT_URL,
+            },
+            # Moto starts each Lambda invocation as a sibling container.
+            "volumes": ["/var/run/docker.sock:/var/run/docker.sock"],
+            "networks": [AWS_NETWORK_NAME],
+            "ports": [f"{HOST_BIND_IP}:{MOTO_EXTERNAL_PORT}:{MOTO_INTERNAL_PORT}"],
+            "dns": DOCKER_DNS,
+            "healthcheck": {
+                "test": ["CMD", "python3", "-c",
+                         f"import urllib.request; urllib.request.urlopen('http://localhost:{MOTO_INTERNAL_PORT}/moto-api/')"],
+                "interval": "5s",
+                "timeout": "5s",
+                "retries": 24,
+                "start_period": "5s",
+            },
+        },
+        ATHENA_ENGINE_CONTAINER_NAME: {
+            "image": ATHENA_ENGINE_IMAGE,
+            "container_name": ATHENA_ENGINE_CONTAINER_NAME,
+            "environment": {
+                "SERVICE_NAME": "hiveserver2",
+                "HADOOP_OPTIONAL_TOOLS": "hadoop-aws",
+                # Query tasks read S3 through the default provider chain.
+                "AWS_ACCESS_KEY_ID": AWS_DUMMY_KEY_ID,
+                "AWS_SECRET_ACCESS_KEY": AWS_DUMMY_SECRET,
+                "AWS_REGION": AWS_REGION,
+            },
+            "volumes": [f"{ENGINE_CONF_DIR / 'core-site.xml'}:/opt/hive/conf/core-site.xml:ro"],
+            "networks": [AWS_NETWORK_NAME],
+            "dns": DOCKER_DNS,
+            "depends_on": {MOTO_CONTAINER_NAME: {"condition": "service_healthy"}},
+            "healthcheck": {
+                "test": ["CMD-SHELL",
+                         f"beeline -u jdbc:hive2://localhost:{ATHENA_ENGINE_PORT} -e 'SELECT 1' >/dev/null 2>&1"],
+                "interval": "10s",
+                "timeout": "60s",
+                "retries": 30,
+                "start_period": "30s",
+            },
+        },
+        ATHENA_GATEWAY_CONTAINER_NAME: {
+            "image": ATHENA_GATEWAY_IMAGE,
+            "build": {"context": str(LABS_ROOT), "dockerfile": "aws/dockerfile.athena-gateway"},
+            "container_name": ATHENA_GATEWAY_CONTAINER_NAME,
+            "environment": {
+                "ATHENA_ENGINE_HOST": ATHENA_ENGINE_CONTAINER_NAME,
+                "ATHENA_ENGINE_PORT": str(ATHENA_ENGINE_PORT),
+                "S3_ENDPOINT_URL": MOTO_INTERNAL_URL,
+                "AWS_REGION": AWS_REGION,
+                "AWS_ACCESS_KEY_ID": AWS_DUMMY_KEY_ID,
+                "AWS_SECRET_ACCESS_KEY": AWS_DUMMY_SECRET,
+            },
+            "networks": [AWS_NETWORK_NAME],
+            "ports": [f"{HOST_BIND_IP}:{ATHENA_GATEWAY_EXTERNAL_PORT}:{ATHENA_GATEWAY_INTERNAL_PORT}"],
+            "dns": DOCKER_DNS,
+            "depends_on": {ATHENA_ENGINE_CONTAINER_NAME: {"condition": "service_healthy"}},
+            "healthcheck": {
+                "test": ["CMD", "python", "-c",
+                         f"import urllib.request; urllib.request.urlopen('http://localhost:{ATHENA_GATEWAY_INTERNAL_PORT}/health')"],
+                "interval": "5s",
+                "timeout": "5s",
+                "retries": 24,
+                "start_period": "5s",
+            },
+        },
+        AWS_TERMINAL_CONTAINER_NAME: {
+            "image": AWS_TERMINAL_IMAGE,
+            "build": {"context": str(LABS_ROOT), "dockerfile": "aws/dockerfile.aws-terminal"},
+            "container_name": AWS_TERMINAL_CONTAINER_NAME,
+            # On Linux and macOS the terminal runs as the host user, so files it
+            # writes in /workspace stay editable on the host; Docker Desktop on
+            # Windows maps ownership itself.
+            **({"user": f"{os.getuid()}:{os.getgid()}"} if hasattr(os, "getuid") else {}),
+            "environment": {
+                "AWS_ENDPOINT_URL": MOTO_INTERNAL_URL,
+                "AWS_ENDPOINT_URL_ATHENA": ATHENA_INTERNAL_URL,
+                "AWS_ACCESS_KEY_ID": AWS_DUMMY_KEY_ID,
+                "AWS_SECRET_ACCESS_KEY": AWS_DUMMY_SECRET,
+                "AWS_DEFAULT_REGION": AWS_REGION,
+                "AWS_PAGER": "",
+            },
+            "volumes": [f"{AWS_TERMINAL_HOST_DIR}:{AWS_TERMINAL_WORKDIR}"],
+            "working_dir": AWS_TERMINAL_WORKDIR,
+            "networks": [AWS_NETWORK_NAME],
+            "dns": DOCKER_DNS,
+            "depends_on": {ATHENA_GATEWAY_CONTAINER_NAME: {"condition": "service_healthy"}},
+            "healthcheck": {
+                "test": ["CMD", "aws", "sts", "get-caller-identity"],
+                "interval": "5s",
+                "timeout": "10s",
+                "retries": 24,
+                "start_period": "5s",
+            },
+        },
+    },
+    "networks": {AWS_NETWORK_NAME: {"name": AWS_NETWORK_NAME, "driver": "bridge"}},
+}
+
+aws_compose_yaml_path = os.path.join(LOCALHOST_WORKDIR, "aws-cluster.docker-compose.yml")
+aws_compose_yaml_contents = yaml.dump(aws_compose_dict, default_flow_style=False, sort_keys=False, indent=4)
+with open(aws_compose_yaml_path, "w", encoding="utf-8", newline="\n") as f:
+    f.write(aws_compose_yaml_contents)
+print(f"Successfully created: '{os.path.relpath(aws_compose_yaml_path)}'")
+display(Markdown(f"```yaml\n{aws_compose_yaml_contents}\n```"))
+
+# %% [markdown]
+# ## 12. Build the gateway and the terminal
+#
+# - **What:** builds `labs-athena-gateway:1` and `labs-aws-terminal:1`.
+# - **Why:** the terminal brings AWS CLI v2 and the lab's Python libraries; the student needs nothing installed on the host.
+# - **How:** `docker compose build`; the terminal image checks the AWS CLI 2.36.17 installer against a pinned SHA-256 (taken from installers whose PGP signature was verified) and installs the exact versions in `uv.lock`. `mount/workspace` is created first so Docker does not create it as root.
+# - 📄 [Compose — build](https://docs.docker.com/reference/compose-file/build/) · [AWS CLI — Install (PGP signature)](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
+
+# %%
+AWS_TERMINAL_HOST_DIR.mkdir(parents=True, exist_ok=True)
+run_command(["docker", "compose", "-f", "aws-cluster.docker-compose.yml", "build",
+             ATHENA_GATEWAY_CONTAINER_NAME, AWS_TERMINAL_CONTAINER_NAME])
+
+# %% [markdown]
+# ## 13. Start the stack
+#
+# - **What:** starts the four services and waits until each health check passes.
+# - **Why:** the lab needs every endpoint answering.
+# - **How:** `docker compose up -d --wait`: Moto (`/moto-api/`), then the engine (`beeline ... SELECT 1`), then the gateway (`/health`), then the terminal (`aws sts get-caller-identity`).
+# - 📄 [docker compose up](https://docs.docker.com/reference/cli/docker/compose/up/)
+
+# %%
+run_command(["docker", "compose", "-f", "aws-cluster.docker-compose.yml", "up", "-d", "--wait"])
+
+# %% [markdown]
+# ## 14. Smoke test
+#
+# - **What:** exercises the stack through the students' endpoints and deletes everything it creates.
+# - **Why:** it proves the account is Moto's, that a Lambda can write to DynamoDB from its own container, and that Athena reads S3.
+# - **How:** STS must return account `123456789012`; a role with `AmazonDynamoDBFullAccess` runs a Lambda that writes one item; an Athena external table over a two-row CSV in S3 must return `2` and `4.0`; finally `aws-terminal` must also see account `123456789012`.
+# - 📄 [STS GetCallerIdentity](https://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html) · [Lambda execution role](https://docs.aws.amazon.com/lambda/latest/dg/lambda-intro-execution-role.html) · [Athena StartQueryExecution](https://docs.aws.amazon.com/athena/latest/APIReference/API_StartQueryExecution.html)
+
+# %%
+import io
+import json
+import time
+import uuid
+import zipfile
+
+import boto3
+
+os.environ.update(CLIENT_ENV)
+for name in UNSET:
+    os.environ.pop(name, None)
+
+identity = boto3.client("sts").get_caller_identity()
+assert identity["Account"] == MOTO_ACCOUNT_ID, identity
+print(f"STS account: {identity['Account']} (Moto)")
+
+smoke = f"labs-infra-smoke-{uuid.uuid4().hex[:8]}"
+s3 = boto3.client("s3")
+s3.create_bucket(Bucket=smoke)
+s3.put_object(Bucket=smoke, Key="raw/datos.csv", Body=b"id,monto\na,1.5\nb,2.5\n")
+
+dynamodb = boto3.client("dynamodb")
+dynamodb.create_table(
+    TableName=smoke,
+    AttributeDefinitions=[{"AttributeName": "id", "AttributeType": "S"}],
+    KeySchema=[{"AttributeName": "id", "KeyType": "HASH"}],
+    BillingMode="PAY_PER_REQUEST",
+)
+iam = boto3.client("iam")
+role_arn = iam.create_role(
+    RoleName=smoke,
+    AssumeRolePolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": [
+        {"Effect": "Allow", "Principal": {"Service": "lambda.amazonaws.com"}, "Action": "sts:AssumeRole"}]}),
+)["Role"]["Arn"]
+iam.attach_role_policy(RoleName=smoke, PolicyArn="arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess")
+package = io.BytesIO()
+with zipfile.ZipFile(package, "w") as archive:
+    archive.writestr("handler.py", (
+        "import os, boto3\n"
+        "def run(event, context):\n"
+        "    boto3.client('dynamodb').put_item(TableName=os.environ['TABLE'], Item={'id': {'S': event['id']}})\n"
+        "    return {'ok': event['id']}\n"
+    ))
+lambda_client = boto3.client("lambda")
+lambda_client.create_function(
+    FunctionName=smoke, Runtime="python3.12", Role=role_arn, Handler="handler.run",
+    Code={"ZipFile": package.getvalue()}, Environment={"Variables": {"TABLE": smoke}},
+)
+invoked = lambda_client.invoke(FunctionName=smoke, Payload=json.dumps({"id": "desde-lambda"}))
+answer = json.loads(invoked["Payload"].read())
+assert invoked["StatusCode"] == 200 and answer == {"ok": "desde-lambda"}, answer
+assert dynamodb.get_item(TableName=smoke, Key={"id": {"S": "desde-lambda"}}).get("Item"), "Lambda did not reach DynamoDB"
+print("Lambda -> DynamoDB: ok")
+
+athena = boto3.client("athena")
+output = {"OutputLocation": f"s3://{smoke}/athena-results/"}
+
+
+def athena_query(sql):
+    query_id = athena.start_query_execution(QueryString=sql, ResultConfiguration=output)["QueryExecutionId"]
+    for _ in range(240):
+        status = athena.get_query_execution(QueryExecutionId=query_id)["QueryExecution"]["Status"]
+        if status["State"] in ("SUCCEEDED", "FAILED"):
+            break
+        time.sleep(0.5)
+    assert status["State"] == "SUCCEEDED", status
+    return athena.get_query_results(QueryExecutionId=query_id)["ResultSet"]["Rows"]
+
+
+database = smoke.replace("-", "_")
+athena_query(f"CREATE DATABASE {database}")
+athena_query(
+    f"CREATE EXTERNAL TABLE {database}.datos (id string, monto double) ROW FORMAT DELIMITED "
+    f"FIELDS TERMINATED BY ',' LOCATION 's3://{smoke}/raw/' TBLPROPERTIES ('skip.header.line.count'='1')"
+)
+rows = athena_query(f"SELECT COUNT(*) AS n, SUM(monto) AS total FROM {database}.datos")
+assert [d["VarCharValue"] for d in rows[1]["Data"]] == ["2", "4.0"], rows
+print("Athena over S3: ok")
+
+athena_query(f"DROP DATABASE {database} CASCADE")
+lambda_client.delete_function(FunctionName=smoke)
+iam.detach_role_policy(RoleName=smoke, PolicyArn="arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess")
+iam.delete_role(RoleName=smoke)
+dynamodb.delete_table(TableName=smoke)
+for item in s3.list_objects_v2(Bucket=smoke).get("Contents", []):
+    s3.delete_object(Bucket=smoke, Key=item["Key"])
+s3.delete_bucket(Bucket=smoke)
+terminal = subprocess.run(
+    ["docker", "exec", AWS_TERMINAL_CONTAINER_NAME, "aws", "sts", "get-caller-identity", "--query", "Account", "--output", "text"],
+    capture_output=True, text=True, encoding="utf-8",
+)
+assert terminal.returncode == 0 and terminal.stdout.strip() == MOTO_ACCOUNT_ID, terminal
+print(f"aws-terminal -> STS account {terminal.stdout.strip()} (Moto)")
+print("AWS lab environment ready. Open the lab terminal with:")
+print(f"  docker exec -it {AWS_TERMINAL_CONTAINER_NAME} bash")
+print(f"Files in {AWS_TERMINAL_HOST_DIR} appear in {AWS_TERMINAL_WORKDIR}.")

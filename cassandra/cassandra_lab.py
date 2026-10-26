@@ -13,7 +13,14 @@
 # ---
 
 # %% [markdown]
-# # Setup
+# # Cassandra lab — CQL and cqlengine from Python
+#
+# ## 1. Parameters
+#
+# - **What:** default values for `NETWORK_MODE`, the VPN identity.
+# - **Why:** the same notebook serves Local mode (ports on `127.0.0.1`) and VPN mode (`<container>.<alias>.<domain>`).
+# - **How:** the cell is tagged `parameters`; papermill inserts an `injected-parameters` cell right after it with the `-p` values.
+# - 📄 [papermill — Parameterize](https://papermill.readthedocs.io/en/latest/usage-parameterize.html)
 
 # %% tags=["parameters"]
 # Local mode is the portable default; VPN mode publishes services on this host.
@@ -24,7 +31,11 @@ VPN_DOMAIN = "vpn.itam.mx"
 VPN_CLIENT_ALIAS = "mavasbel"
 
 # %% [markdown]
-# This cell normalizes and validates the injected NETWORK_MODE and VPN_CLIENT_ALIAS parameters, rejecting unsupported modes, a VPN host outside the 10.15.20.* subnet, or malformed aliases, and derives VPN_CLIENT_DOMAIN.
+# ## 2. Validate the parameters
+#
+# - **What:** lower-cases `NETWORK_MODE` and `VPN_CLIENT_ALIAS` and builds `VPN_CLIENT_DOMAIN = <alias>.<domain>`.
+# - **Why:** a wrong value must stop the notebook here, before any container changes.
+# - **How:** rejects any mode other than `local`/`vpn` and, in VPN mode, a host IP outside `10.15.20.*`, and an alias that is not lower-case letters, digits and inner hyphens.
 
 # %%
 import re
@@ -45,7 +56,11 @@ if re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", VPN_CLIENT_ALIAS) is None:
 VPN_CLIENT_DOMAIN = f"{VPN_CLIENT_ALIAS}.{VPN_DOMAIN}"
 
 # %% [markdown]
-# This cell walks up from the current directory to locate the labs-setup root (LABS_ROOT), resolves MODULE_DIR to its cassandra folder, and changes the working directory there so module assets resolve consistently.
+# ## 3. Find the module folder
+#
+# - **What:** locates the labs-setup root, changes into `cassandra/` and imports `run_command`.
+# - **Why:** relative paths (Compose file, `mount/`) then resolve the same way whether papermill or JupyterLab started the kernel; `run_command` passes an argument list to the program without a shell, so it behaves the same on Windows, macOS and Linux.
+# - **How:** walks up from the current folder to the first one holding `pyproject.toml`, `cassandra/` and `mongodb/`.
 
 # %%
 # Resolve module assets from the labs-setup root.
@@ -72,7 +87,12 @@ os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
 # %% [markdown]
-# This cell defines the lab-side cluster constants: node names, per-node RPC/gossip/SSL/JMX ports, client hosts selected from NETWORK_MODE through vpn_fqdn, certificate passwords, and the initial cassandra/cassandra credentials.
+# ## 4. Cluster constants
+#
+# - **What:** the node names, the CQL ports `9041-9043` and the host the client uses for each node.
+# - **Why:** they must match what `cassandra_infra` published, or the driver cannot reach the nodes.
+# - **How:** `127.0.0.1` in Local mode, `cassandra-node-N.<alias>.<domain>` in VPN mode; user and password are the defaults `cassandra`/`cassandra`.
+# - 📄 [Cassandra 5.0 — Security](https://cassandra.apache.org/doc/5.0/cassandra/managing/operating/security.html)
 
 # %%
 CASSANDRA_START_FROM_SCRATCH = False
@@ -103,7 +123,12 @@ CASSANDRA_INIT_PASSWORD = "cassandra"
 CASSANDRA_WORKDIR = "/var/lib/cassandra"
 
 # %% [markdown]
-# This cell computes LOCALHOST_WORKDIR, DOCKER_MOUNTDIR, and CASSANDRA_LOCALHOST_CLUSTER_CA_CERTDIR relative to the current directory, creates the mount directory, and enables CQLENG_ALLOW_SCHEMA_MANAGEMENT for later schema changes.
+# ## 5. Paths and cqlengine flag
+#
+# - **What:** defines `mount/` and `cluster_certs/` and sets `CQLENG_ALLOW_SCHEMA_MANAGEMENT`.
+# - **Why:** cqlengine warns before `sync_table` changes a schema unless this variable is set; section 17 uses `sync_table`.
+# - **How:** `os.environ.setdefault`, so a value already set outside the notebook is kept.
+# - 📄 [`cqlengine.management` source](https://github.com/apache/cassandra-python-driver/blob/3.30.1/cassandra/cqlengine/management.py)
 
 # %%
 import os
@@ -118,7 +143,12 @@ mount_path.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("CQLENG_ALLOW_SCHEMA_MANAGEMENT", "True")
 
 # %% [markdown]
-# # Session creation
+# ## 6. Connect to the cluster
+#
+# - **What:** opens a driver `Session` against the three nodes with user and password.
+# - **Why:** every later cell sends its CQL through this session.
+# - **How:** `PlainTextAuthProvider` logs in; the custom endpoint factory maps each node's CQL port to the client host, because the nodes announce container addresses the host cannot reach. The cell asserts 3 nodes, all up, at the expected endpoints.
+# - 📄 [cassandra-driver 3.30.1 — Getting started](https://github.com/apache/cassandra-python-driver/blob/3.30.1/docs/getting_started.rst) · [`DefaultEndPointFactory` source](https://github.com/apache/cassandra-python-driver/blob/3.30.1/cassandra/connection.py)
 
 # %%
 from cassandra.cluster import Cluster
@@ -177,7 +207,12 @@ assert discovered_endpoints == expected_endpoints, discovered_endpoints
 assert all(host.is_up for host in cluster.metadata.all_hosts())
 
 # %% [markdown]
-# This cell configures pandas display options and renders a DataFrame summarizing every host known to the cluster from cluster.metadata.all_hosts().
+# ## 7. Show the cluster nodes
+#
+# - **What:** prints a table with the hosts the driver discovered.
+# - **Why:** it shows that one connection learns the whole ring, not just the contact points.
+# - **How:** `cluster.metadata.all_hosts()` rendered with pandas, all rows and columns visible.
+# - 📄 [pandas — Options and settings](https://pandas.pydata.org/docs/user_guide/options.html)
 
 # %%
 import pprint
@@ -201,7 +236,11 @@ display(
 )
 
 # %% [markdown]
-# This cell keeps commented-out exploratory queries against system.peers_v2 and system.local for inspecting the cluster topology directly.
+# ## 8. System tables (optional)
+#
+# - **What:** commented queries on `system.peers_v2` and `system.local`.
+# - **Why:** these tables are where the driver reads the ring topology.
+# - **How:** uncomment to print every column of each row.
 
 # %%
 # from cassandra.cluster import ResultSet
@@ -217,7 +256,12 @@ display(
 # print("=" * 100)
 
 # %% [markdown]
-# ### Keyspace
+# ## 9. Drop the keyspace (only when starting over)
+#
+# - **What:** drops `generic_analytics` if `CASSANDRA_START_FROM_SCRATCH` is `True`.
+# - **Why:** the lab runs on top of earlier data; the default `False` keeps it.
+# - **How:** `DROP KEYSPACE IF EXISTS`.
+# - 📄 [CQL 5.0 — Data definition](https://cassandra.apache.org/doc/5.0/cassandra/developing/cql/ddl.html)
 
 # %%
 keyspace_name = "generic_analytics"
@@ -225,7 +269,12 @@ if CASSANDRA_START_FROM_SCRATCH:
     session.execute(f"DROP KEYSPACE IF EXISTS {keyspace_name}")
 
 # %% [markdown]
-# This cell creates the generic_analytics keyspace with NetworkTopologyStrategy replication across all nodes, sets it as the session default, and creates the user_metrics table partitioned by city with user_id as the clustering column.
+# ## 10. Keyspace and table
+#
+# - **What:** creates the `generic_analytics` keyspace with 3 replicas and the `user_metrics` table.
+# - **Why:** the partition key `city` decides which nodes store a row; the clustering column `user_id` orders rows inside a city.
+# - **How:** `NetworkTopologyStrategy` with `'dc1': 3`, so every node holds a copy; `PRIMARY KEY (city, user_id)`.
+# - 📄 [CQL 5.0 — Data definition](https://cassandra.apache.org/doc/5.0/cassandra/developing/cql/ddl.html)
 
 # %%
 keyspace_name = "generic_analytics"
@@ -257,7 +306,12 @@ CREATE TABLE IF NOT EXISTS user_metrics (
 )
 
 # %% [markdown]
-# ### Insert
+# ## 11. Fake data generator
+#
+# - **What:** creates a `Faker` instance.
+# - **Why:** realistic cities, user names and numbers without real personal data.
+# - **How:** `Faker()` with the default locale.
+# - 📄 [Faker](https://faker.readthedocs.io/en/master/)
 
 # %%
 from faker import Faker
@@ -265,7 +319,12 @@ from faker import Faker
 fake = Faker()
 
 # %% [markdown]
-# This cell prepares an INSERT statement with session.prepare, fills a LOGGED BatchStatement at QUORUM consistency with 200 Faker-generated user_metrics records, and executes the batch atomically.
+# ## 12. Batch insert
+#
+# - **What:** inserts 200 rows in one `LOGGED` batch at consistency `QUORUM`.
+# - **Why:** a prepared statement is parsed once and reused; a logged batch is applied completely or not at all; `QUORUM` needs 2 of 3 replicas.
+# - **How:** `session.prepare` with `?` markers, `BatchStatement(batch_type=BatchType.LOGGED)`, then one `session.execute(batch)`.
+# - 📄 [`BatchStatement` API](https://github.com/apache/cassandra-python-driver/blob/3.30.1/docs/api/cassandra/query.rst) · [CQL 5.0 — Data manipulation](https://cassandra.apache.org/doc/5.0/cassandra/developing/cql/dml.html) · [Cassandra 5.0 — Consistency levels](https://cassandra.apache.org/doc/5.0/cassandra/architecture/dynamo.html)
 
 # %%
 import uuid
@@ -306,7 +365,12 @@ session.execute(batch)
 print("Batch successfully committed to the cluster.")
 
 # %% [markdown]
-# ### Query
+# ## 13. Count the rows
+#
+# - **What:** counts the rows of `user_metrics` and checks there are at least 200.
+# - **Why:** it confirms the batch was written.
+# - **How:** `SELECT count(*)`; the assertion stops the notebook if rows are missing.
+# - 📄 [CQL 5.0 — Data manipulation](https://cassandra.apache.org/doc/5.0/cassandra/developing/cql/dml.html)
 
 # %%
 from cassandra.cluster import ResultSet
@@ -320,7 +384,12 @@ assert row_count >= batch_records, row_count
 print(f"Rows stored: {row_count}")
 
 # %% [markdown]
-# This cell runs SELECT * FROM user_metrics LIMIT 100 and prints each row returned in the ResultSet.
+# ## 14. Read rows
+#
+# - **What:** prints up to 100 rows.
+# - **Why:** a `SELECT` without a `WHERE` reads from every partition.
+# - **How:** `SELECT * FROM user_metrics LIMIT 100`.
+# - 📄 [CQL 5.0 — Data manipulation](https://cassandra.apache.org/doc/5.0/cassandra/developing/cql/dml.html)
 
 # %%
 from cassandra.cluster import ResultSet
@@ -330,7 +399,12 @@ for row in rows.current_rows:
     print(row)
 
 # %% [markdown]
-# This cell queries DISTINCT city values from user_metrics to show how the partition key distributes rows across the cluster.
+# ## 15. Distinct partition keys
+#
+# - **What:** lists the distinct `city` values.
+# - **Why:** each city is one partition, the unit Cassandra distributes across the nodes.
+# - **How:** `SELECT DISTINCT city`, allowed because `city` is the partition key.
+# - 📄 [CQL 5.0 — Data manipulation](https://cassandra.apache.org/doc/5.0/cassandra/developing/cql/dml.html)
 
 # %%
 from cassandra.cluster import ResultSet
@@ -340,7 +414,12 @@ for row in rows.current_rows:
     print(row)
 
 # %% [markdown]
-# ### Find nodes storing random data
+# ## 16. Which nodes store a row
+#
+# - **What:** picks a row from a random token and asks the driver which nodes hold its replicas.
+# - **Why:** with replication factor 3 on 3 nodes, every node must hold it; the cell asserts that.
+# - **How:** `token(city) >= <random>` finds a row, `prepare(...).bind(...)` gives its routing key, `cluster.metadata.get_replicas` returns the nodes.
+# - 📄 [CQL 5.0 — Data manipulation](https://cassandra.apache.org/doc/5.0/cassandra/developing/cql/dml.html) · [`Metadata.get_replicas` source](https://github.com/apache/cassandra-python-driver/blob/3.30.1/cassandra/metadata.py)
 
 # %%
 import random
@@ -362,7 +441,12 @@ for node in nodes:
     print(f" - Host: {node.address}, Gossip Port: {node.broadcast_port}")
 
 # %% [markdown]
-# ### ORM-like
+# ## 17. cqlengine model
+#
+# - **What:** maps `user_metrics` to the Python class `UserMetrics` and syncs the table.
+# - **Why:** an object mapper writes and reads rows as objects instead of CQL strings.
+# - **How:** `city` is the partition key, `user_id` the clustering key; `index=True` on `username` adds a secondary index; `create_keyspace_network_topology` and `sync_table` create what is missing.
+# - 📄 [cqlengine — Models](https://github.com/apache/cassandra-python-driver/blob/3.30.1/docs/cqlengine/models.rst)
 
 # %%
 from typing import cast
@@ -398,7 +482,12 @@ create_keyspace_network_topology(keyspace_name, {"dc1": CASSANDRA_TOTAL_NODES})
 sync_table(UserMetrics)
 
 # %% [markdown]
-# This cell uses the UserMetrics model as an ORM: UserMetrics.create saves a new record, and a ModelQuerySet filter with allow_filtering retrieves metrics whose session_duration is at least 120.
+# ## 18. Create and filter with the model
+#
+# - **What:** saves one object and reads the rows with `session_duration >= 120`.
+# - **Why:** it is the object-mapper version of `INSERT` and `SELECT ... WHERE`.
+# - **How:** `UserMetrics.create(...)`; the filter is on a non-key column, so it needs `allow_filtering()`, which scans every partition.
+# - 📄 [cqlengine — Models](https://github.com/apache/cassandra-python-driver/blob/3.30.1/docs/cqlengine/models.rst) · [CQL 5.0 — Data manipulation](https://cassandra.apache.org/doc/5.0/cassandra/developing/cql/dml.html)
 
 # %%
 # 4. Use it like an ORM
@@ -423,7 +512,12 @@ for user_metric in user_metrics:
     print(f"Query user_metris: {user_metric}")
 
 # %% [markdown]
-# ### Insert/Create
+# ## 19. Insert with a time to live
+#
+# - **What:** inserts one row that expires after 86 400 seconds (one day).
+# - **Why:** Cassandra deletes expired data by itself.
+# - **How:** `UserMetrics.ttl(86400).create(...)`, which sends `INSERT ... USING TTL 86400`.
+# - 📄 [CQL 5.0 — Data manipulation](https://cassandra.apache.org/doc/5.0/cassandra/developing/cql/dml.html)
 
 # %%
 from typing import cast
@@ -436,7 +530,12 @@ cast(ModelQuerySet, UserMetrics.ttl(86400)).create(
 )
 
 # %% [markdown]
-# This cell inserts 100 Faker-generated UserMetrics records inside a single BatchQuery transaction using UserMetrics.batch(b).
+# ## 20. Batch with the model
+#
+# - **What:** inserts 100 objects in one batch.
+# - **Why:** it groups the inserts into one request, like section 12.
+# - **How:** the `with BatchQuery() as b:` block sends the batch when it ends.
+# - 📄 [cqlengine — Batch queries](https://github.com/apache/cassandra-python-driver/blob/3.30.1/docs/cqlengine/batches.rst)
 
 # %%
 from typing import cast
@@ -453,7 +552,12 @@ with BatchQuery() as b:
         )
 
 # %% [markdown]
-# ### Delete
+# ## 21. Delete and close
+#
+# - **What:** deletes the rows with `session_duration >= 120` and closes the connection.
+# - **Why:** it completes create, read and delete; closing frees the driver's connections and threads.
+# - **How:** `delete()` on each object found by the filter, then `session.shutdown()` and `cluster.shutdown()`.
+# - 📄 [CQL 5.0 — Data manipulation](https://cassandra.apache.org/doc/5.0/cassandra/developing/cql/dml.html)
 
 # %%
 user_metrics = (
@@ -469,7 +573,12 @@ session.shutdown()
 cluster.shutdown()
 
 # %% [markdown]
-# This cell holds a commented-out ALTER TABLE command lowering gc_grace_seconds on user_metrics so deleted data becomes visible to the background compaction process sooner.
+# ## 22. Tombstones (optional)
+#
+# - **What:** a commented `ALTER TABLE ... WITH gc_grace_seconds = 10`.
+# - **Why:** a delete writes a tombstone that compaction only removes after `gc_grace_seconds` (default 10 days).
+# - **How:** uncomment to shorten that wait on this table only.
+# - 📄 [CQL 5.0 — Data definition](https://cassandra.apache.org/doc/5.0/cassandra/developing/cql/ddl.html)
 
 # %%
 # from cassandra.cqlengine import connection

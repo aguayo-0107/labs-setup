@@ -42,13 +42,18 @@ uv run papermill opensearch/opensearch_lab.ipynb opensearch/opensearch_lab.execu
 
 uv run papermill hadoop/hadoop_infra.ipynb hadoop/hadoop_infra.executed.ipynb -p NETWORK_MODE local -p START_FROM_SCRATCH True
 uv run papermill hadoop/hadoop_lab.ipynb hadoop/hadoop_lab.executed.ipynb -p NETWORK_MODE local
-uv run papermill hadoop/hive_infra.ipynb hadoop/hive_infra.executed.ipynb -p NETWORK_MODE local -p START_FROM_SCRATCH True
-uv run papermill hadoop/hive_lab.ipynb hadoop/hive_lab.executed.ipynb -p NETWORK_MODE local
+uv run papermill hive/hive_infra.ipynb hive/hive_infra.executed.ipynb -p NETWORK_MODE local -p START_FROM_SCRATCH True
+uv run papermill hive/hive_lab.ipynb hive/hive_lab.executed.ipynb -p NETWORK_MODE local
 uv run papermill spark/spark_infra.ipynb spark/spark_infra.executed.ipynb -p NETWORK_MODE local -p START_FROM_SCRATCH True
-uv run papermill spark/spark_lab.ipynb spark/spark_lab.executed.ipynb -p NETWORK_MODE local
+docker exec -w /opt/spark/work-dir/labs-setup spark-jupyter papermill spark/spark_lab.ipynb /tmp/spark_lab.executed.ipynb -k python3 -p NETWORK_MODE local
+
+uv run papermill aws/aws_infra.ipynb aws/aws_infra.executed.ipynb -p NETWORK_MODE local -p START_FROM_SCRATCH True
+uv run papermill aws/aws_lab.ipynb aws/aws_lab.executed.ipynb -p NETWORK_MODE local
 ```
 
-Hive and Spark require healthy Hadoop infrastructure. Run `hadoop_infra.ipynb` before `hive_infra.ipynb` or `spark_infra.ipynb`.
+Hive and Spark require healthy Hadoop infrastructure. Run `hadoop_infra.ipynb` before `hive_infra.ipynb` or `spark_infra.ipynb`. The Spark lab notebook is the Spark Driver and runs inside the `spark-jupyter` container, which mounts labs-setup read-only (its executed copy stays in the container's `/tmp`).
+
+The AWS pair is self-contained (it does not use the Hadoop/Hive cluster) and uses no AWS account. Students open the lab terminal with `docker exec -it aws-terminal bash`; `aws sts get-caller-identity` there reports account `123456789012`.
 
 ## VPN Execution
 
@@ -87,11 +92,11 @@ Generated Compose files, state, credentials, keys, certificates, and `*.executed
 ## Acceptance Checklist
 
 - `uv sync` succeeds in the submodule environment.
-- All 17 notebooks have exactly one parameters cell and match their canonical `py:percent` sources.
+- All 19 notebooks have exactly one parameters cell and match their canonical `py:percent` sources.
 - Every `*_infra.ipynb` completes and reports healthy before its matching `*_lab.ipynb`.
 - The MongoDB config-server infrastructure notebook completes.
 - Hadoop completes before Hive and Spark; both dependent stacks complete successfully.
 - All supported infrastructure/lab pairs pass in Local mode and VPN mode.
 - Local clients use `127.0.0.1`; VPN base and wildcard service DNS tests resolve to `VPN_HOST_IP`.
-- Spark validates all four tracked JAR checksums and performs no runtime Maven resolution or download.
+- Spark validates all eight tracked JAR checksums (Iceberg 1.12.0, five Delta Lake 4.3.1 JARs and two GraphFrames 0.12.3 JARs) and performs no runtime Maven resolution or download; `spark_infra` reports GraphFrames 0.12.3 ready in `spark-jupyter` and every Worker.
 - Cleanup leaves no required generated output in version control.

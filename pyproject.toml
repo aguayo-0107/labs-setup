@@ -6,7 +6,6 @@ readme = "README.md"
 requires-python = ">=3.10,<3.11"
 dependencies = [
     "cassandra-driver>=3.29.3",
-    "delta-spark==3.2.0",
     "faker>=39.0.0",
     "faker-commerce>=1.0.4",
     "ipykernel>=7.1.0",
@@ -17,7 +16,6 @@ dependencies = [
     "jupyterlab==4.6.3",
     "mimesis>=18.0.0",
     "neo4j>=6.0.3",
-    "neo4j-driver>=5.28.2",
     "notebook==7.6.2",
     "openpyxl>=3.1.5",
     "opensearch-py==3.0.0",
@@ -26,12 +24,12 @@ dependencies = [
     "portforward>=0.7.5",
     "prettytable==3.7.0",
     "pure-sasl>=0.6.2",
-    "pyarrow==22.0.0",
+    "pyarrow==25.0.1",
     "pyasyncore>=1.0.4",
     "pyhive>=0.7.0",
     "pymongo>=4.15.5",
     "pymysql>=1.1.2",
-    "pyspark==3.5.7",
+    "pyspark==4.1.2",
     "python-dotenv>=1.2.1",
     "pyyaml>=6.0.3",
     "redis>=7.1.0",
@@ -42,4 +40,33 @@ dependencies = [
     "thrift-sasl>=0.4.3",
     "tqdm>=4.67.1",
     "venv-pack>=0.2.0",
+    "boto3>=1.40",
 ]
+
+[dependency-groups]
+dev = [
+    "coverage==7.16.2",
+    "pytest==9.1.1",
+    "pytest-cov==7.1.0",
+]
+
+[tool.pytest.ini_options]
+minversion = "9.0"
+testpaths = ["tests"]
+addopts = ["-q", "--strict-markers", "--strict-config", "--cov", "--cov-report=term-missing"]
+markers = [
+    "unit: pure rules and adapters on synthetic data",
+    "component: the audit applied to the real notebooks of this repository",
+    "live: execute infra/lab notebooks with papermill against Docker (opt-in: LABS_LIVE=1) and check every notebook link answers HTTP 200 (opt-in: LABS_LINKS=1)",
+    "e2e: the command-line audit end to end, including a negative control",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["labs_audit", "athena_gateway", "labs_runtime", "labs_parity"]
+# Measure `python -m athena_gateway` when the e2e tier runs it as a process.
+patch = ["subprocess"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 100

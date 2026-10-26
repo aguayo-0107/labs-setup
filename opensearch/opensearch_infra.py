@@ -13,7 +13,14 @@
 # ---
 
 # %% [markdown]
-# # Setup
+# # OpenSearch — infrastructure
+#
+# ## 1. Parameters
+#
+# - **What:** default values for `NETWORK_MODE`, the VPN identity and `START_FROM_SCRATCH`.
+# - **Why:** the same notebook serves Local mode (ports on `127.0.0.1`) and VPN mode (`<container>.<alias>.<domain>`).
+# - **How:** the cell is tagged `parameters`; papermill inserts an `injected-parameters` cell right after it with the `-p` values.
+# - 📄 [papermill — Parameterize](https://papermill.readthedocs.io/en/latest/usage-parameterize.html)
 
 # %% tags=["parameters"]
 # Local mode is the portable default; VPN mode publishes services on this host.
@@ -25,7 +32,11 @@ VPN_CLIENT_ALIAS = "mavasbel"
 START_FROM_SCRATCH = False
 
 # %% [markdown]
-# Validates the papermill-injected NETWORK_MODE and VPN_CLIENT_ALIAS values, rejecting anything other than lowercase local or vpn mode, and derives the student's VPN_CLIENT_DOMAIN.
+# ## 2. Validate the parameters
+#
+# - **What:** lower-cases `NETWORK_MODE` and `VPN_CLIENT_ALIAS` and builds `VPN_CLIENT_DOMAIN = <alias>.<domain>`.
+# - **Why:** a wrong value must stop the notebook here, before any container changes.
+# - **How:** rejects any mode other than `local`/`vpn` and, in VPN mode, a host IP outside `10.15.20.*`, and an alias that is not lower-case letters, digits and inner hyphens.
 
 # %%
 import re
@@ -46,7 +57,11 @@ if re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", VPN_CLIENT_ALIAS) is None:
 VPN_CLIENT_DOMAIN = f"{VPN_CLIENT_ALIAS}.{VPN_DOMAIN}"
 
 # %% [markdown]
-# Locates the labs-setup project root by walking up from the current directory until a pyproject.toml with the cassandra and mongodb module directories is found, then changes into the opensearch module directory.
+# ## 3. Find the module folder
+#
+# - **What:** locates the labs-setup root, changes into `opensearch/` and imports `run_command`.
+# - **Why:** relative paths (Compose file, `mount/`) then resolve the same way whether papermill or JupyterLab started the kernel; `run_command` passes an argument list to the program without a shell, so it behaves the same on Windows, macOS and Linux.
+# - **How:** walks up from the current folder to the first one holding `pyproject.toml`, `cassandra/` and `mongodb/`.
 
 # %%
 # Resolve module assets from the labs-setup root.
@@ -69,11 +84,21 @@ if LABS_ROOT is None:
         "Could not find the labs-setup root from the current directory"
     )
 MODULE_DIR = LABS_ROOT / "opensearch"
+import sys
+
+if str(LABS_ROOT) not in sys.path:
+    sys.path.insert(0, str(LABS_ROOT))
+from labs_runtime import run_command
+
 os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
 # %% [markdown]
-# Builds the cluster topology settings: three opensearch-node containers, their REST and performance-analyzer ports, local hostnames or VPN FQDNs, the Dashboards service name, and the initial admin password.
+# ## 4. Cluster settings
+#
+# - **What:** three nodes `opensearch-node-1..3` with REST ports `9201-9203` and Performance Analyzer ports `16281-16283`, plus Dashboards on `5601`; the admin password is `OpenSearchP455`.
+# - **Why:** every node publishes on the same host, so each needs its own ports; clients reach `127.0.0.1` (Local) or `opensearch-node-N.<alias>.<domain>` (VPN).
+# - **How:** Dashboards reaches the nodes by container name over HTTPS (`https://opensearch-node-N:<port>`).
 
 # %%
 OPENSEARCH_START_FROM_SCRATCH = START_FROM_SCRATCH
@@ -122,7 +147,12 @@ OPENSEARCH_INITIAL_ADMIN_PASSWORD = "OpenSearchP455"
 # OPENSEARCH_INIT_PASSWORD = "opensearch"
 
 # %% [markdown]
-# Creates the bind-mount base directory under the opensearch module folder that will hold the per-node data volumes.
+# ## 5. Host folder
+#
+# - **What:** creates `mount/`, with one folder per node.
+# - **Why:** the indexes survive a container restart.
+# - **How:** path built from `MODULE_DIR` with `os.path.join`.
+# - 📄 [Docker — Bind mounts](https://docs.docker.com/engine/storage/bind-mounts/)
 
 # %%
 import os
@@ -135,7 +165,12 @@ mount_path = Path(DOCKER_MOUNTDIR)
 mount_path.mkdir(parents=True, exist_ok=True)
 
 # %% [markdown]
-# # Stop opensearch-cluster.docker-compose.yml
+# ## 6. Stop the previous cluster
+#
+# - **What:** with `START_FROM_SCRATCH=True`, removes the containers, network and volumes.
+# - **Why:** a fresh build must not reuse old nodes; with `False` the running cluster is kept.
+# - **How:** `docker compose -f opensearch-cluster.docker-compose.yml down -v` (`check=False`).
+# - 📄 [docker compose down](https://docs.docker.com/reference/cli/docker/compose/down/)
 
 # %%
 import subprocess
@@ -150,7 +185,12 @@ else:
 
 
 # %% [markdown]
-# Defines clear_bind_directory, which empties the bind-mount directory using a throwaway busybox container when START_FROM_SCRATCH is enabled.
+# ## 7. Delete the old state
+#
+# - **What:** with `START_FROM_SCRATCH=True`, empties `mount/`.
+# - **Why:** the node data belongs to uid 1000 and the host user cannot always delete it.
+# - **How:** `rm -rf` runs as root inside a throwaway `busybox:1.36` container that sees `mount/` as `/target`.
+# - 📄 [docker container run](https://docs.docker.com/reference/cli/docker/container/run/)
 
 # %%
 def clear_bind_directory(path):
@@ -170,7 +210,12 @@ if OPENSEARCH_START_FROM_SCRATCH:
     clear_bind_directory(DOCKER_MOUNTDIR)
 
 # %% [markdown]
-# # Start opensearch-cluster.docker-compose.yml
+# ## 8. Data folders and Compose file
+#
+# - **What:** prepares each node's `data` folder and `performance-analyzer.properties`, then generates `opensearch-cluster.docker-compose.yml` with three `opensearch:3.4.0` nodes and `opensearch-dashboards:3.4.0` (2 CPUs and 2 GB each, 1 GB Java heap).
+# - **Why:** OpenSearch runs as uid 1000 and fails with `AccessDeniedException` if Docker creates the data folder as root; the three nodes must find each other to form one cluster.
+# - **How:** a throwaway container runs `chown -R 1000:1000` on each data folder. Nodes get `discovery.seed_hosts` and `cluster.initial_cluster_manager_nodes` with the three names, `bootstrap.memory_lock=true` with an unlimited `memlock`, and `OPENSEARCH_INITIAL_ADMIN_PASSWORD`, which the demo security setup requires; `cluster.routing.allocation.disk.threshold_enabled=false` turns off the disk allocation decider, so a nearly full host disk does not stop shard allocation. The health check accepts any status but `red`; Dashboards starts after the three nodes are healthy.
+# - 📄 [OpenSearch 3.4 — Docker](https://docs.opensearch.org/3.4/install-and-configure/install-opensearch/docker/) · [Demo security configuration](https://docs.opensearch.org/3.4/security/configuration/demo-configuration/) · [Cluster settings](https://docs.opensearch.org/3.4/install-and-configure/configuring-opensearch/cluster-settings/) · [Performance Analyzer](https://docs.opensearch.org/3.4/monitoring-your-cluster/pa/index/) · [Cluster health API](https://docs.opensearch.org/3.4/api-reference/cluster-api/cluster-health/)
 
 # %%
 import os
@@ -198,8 +243,23 @@ for i in range(OPENSEARCH_TOTAL_NODES):
         OPENSEARCH_NODE_NAMES[i],
     )
     Path(node_mount_dir).mkdir(parents=True, exist_ok=True)
+    # Create the data directory before Compose does: a missing bind source is
+    # created by the Docker daemon as root, and OpenSearch (uid 1000 in the
+    # image) then fails with AccessDeniedException on Linux hosts. The
+    # throwaway container hands it to uid 1000 whatever the host user is.
+    node_data_dir = Path(node_mount_dir, "data").resolve()
+    node_data_dir.mkdir(exist_ok=True)
+    subprocess.run(
+        [
+            "docker", "run", "--rm", "--mount",
+            f"type=bind,source={node_data_dir},target=/target",
+            "busybox:1.36", "chown", "-R", "1000:1000", "/target",
+        ],
+        check=True,
+    )
     with open(
-        os.path.join(node_mount_dir, "performance-analyzer.properties"), "w"
+        os.path.join(node_mount_dir, "performance-analyzer.properties"), "w",
+        encoding="utf-8", newline="\n",
     ) as f:
         f.write(
             f"""# Performance Analyzer Configuration for {OPENSEARCH_NODE_NAMES[i]}
@@ -290,14 +350,19 @@ opensearch_compose_yaml_contents = yaml.dump(
     opensearch_compose_dict, default_flow_style=False, sort_keys=False, indent=4
 )
 
-with open(opensearch_compose_yaml_path, "w") as f:
+with open(opensearch_compose_yaml_path, "w", encoding="utf-8", newline="\n") as f:
     f.write(opensearch_compose_yaml_contents)
 
 print(f"Successfully created: '{os.path.relpath(opensearch_compose_yaml_path)}'")
 display(Markdown(f"```yaml\n{opensearch_compose_yaml_contents}\n```"))
 
 # %% [markdown]
-# Starts the generated opensearch-cluster.docker-compose.yml stack in detached mode and waits until every node's _cluster/health healthcheck and Dashboards become healthy.
+# ## 9. Start OpenSearch
+#
+# - **What:** starts the nodes and Dashboards and waits until the health checks pass.
+# - **Why:** the lab notebook needs a cluster that already answers on its REST ports.
+# - **How:** `docker compose up -d --wait`.
+# - 📄 [docker compose up](https://docs.docker.com/reference/cli/docker/compose/up/)
 
 # %%
-# !docker compose -f opensearch-cluster.docker-compose.yml up -d --wait
+run_command(["docker", "compose", "-f", "opensearch-cluster.docker-compose.yml", "up", "-d", "--wait"])

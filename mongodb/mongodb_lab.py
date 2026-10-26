@@ -13,7 +13,14 @@
 # ---
 
 # %% [markdown]
-# # Setup
+# # MongoDB lab — documents with PyMongo
+#
+# ## 1. Parameters
+#
+# - **What:** default values for `NETWORK_MODE`, the VPN identity.
+# - **Why:** the same notebook serves Local mode (ports on `127.0.0.1`) and VPN mode (`<container>.<alias>.<domain>`).
+# - **How:** the cell is tagged `parameters`; papermill inserts an `injected-parameters` cell right after it with the `-p` values.
+# - 📄 [papermill — Parameterize](https://papermill.readthedocs.io/en/latest/usage-parameterize.html)
 
 # %% tags=["parameters"]
 # Local mode is the portable default; VPN mode publishes services on this host.
@@ -24,7 +31,11 @@ VPN_DOMAIN = "vpn.itam.mx"
 VPN_CLIENT_ALIAS = "mavasbel"
 
 # %% [markdown]
-# Validates and normalizes the papermill-injected network parameters, rejecting any NETWORK_MODE other than lowercase `local` or `vpn` or an invalid VPN_CLIENT_ALIAS, and composing VPN_CLIENT_DOMAIN for later hostname construction.
+# ## 2. Validate the parameters
+#
+# - **What:** lower-cases `NETWORK_MODE` and `VPN_CLIENT_ALIAS` and builds `VPN_CLIENT_DOMAIN = <alias>.<domain>`.
+# - **Why:** a wrong value must stop the notebook here, before any container changes.
+# - **How:** rejects any mode other than `local`/`vpn` and, in VPN mode, a host IP outside `10.15.20.*`, and an alias that is not lower-case letters, digits and inner hyphens.
 
 # %%
 import re
@@ -45,7 +56,11 @@ if re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", VPN_CLIENT_ALIAS) is None:
 VPN_CLIENT_DOMAIN = f"{VPN_CLIENT_ALIAS}.{VPN_DOMAIN}"
 
 # %% [markdown]
-# Locates the labs-setup project root by walking parent directories until it finds a `pyproject.toml` alongside the `cassandra` and `mongodb` folders, then changes the working directory to the mongodb module.
+# ## 3. Find the module folder
+#
+# - **What:** locates the labs-setup root, changes into `mongodb/` and imports `run_command`.
+# - **Why:** relative paths (Compose file, `mount/`) then resolve the same way whether papermill or JupyterLab started the kernel; `run_command` passes an argument list to the program without a shell, so it behaves the same on Windows, macOS and Linux.
+# - **How:** walks up from the current folder to the first one holding `pyproject.toml`, `cassandra/` and `mongodb/`.
 
 # %%
 # Resolve module assets from the labs-setup root.
@@ -72,7 +87,11 @@ os.chdir(MODULE_DIR)
 print(f"Working directory: {MODULE_DIR}")
 
 # %% [markdown]
-# Defines the lab's view of the running replica set: `MONGODB_REPLICA_SET` with three nodes, ports 27011 through 27013, client hosts resolved per NETWORK_MODE via `vpn_fqdn`, and the admin credentials used throughout the notebook.
+# ## 4. Replica set constants
+#
+# - **What:** the replica set name `replica_set_0`, the member ports `27011-27013`, the client host of each member and the root user `admin`/`admin`.
+# - **Why:** they must match what `mongodb_infra` published.
+# - **How:** `127.0.0.1` in Local mode, `mongodb-node-N.<alias>.<domain>` in VPN mode.
 
 # %%
 DOCKER_INTERNAL_HOST = "host.docker.internal"
@@ -98,7 +117,11 @@ MONGO_INITDB_ROOT_PASSWORD = "admin"
 MONGO_INITDB_DATABASE = "admin"
 
 # %% [markdown]
-# Prepares the local `mount/` working directory relative to the current path and computes MONGODB_LOCAL_CLUSTER_KEY_PATH, mirroring the layout used by the infrastructure notebook.
+# ## 5. Paths
+#
+# - **What:** defines `mount/` and the keyfile path, as the infrastructure notebook does.
+# - **Why:** the lab only reads them; it never changes the members' files.
+# - **How:** paths relative to the module folder, built with `os.path.join`.
 
 # %%
 import os
@@ -112,7 +135,12 @@ mount_path = Path(DOCKER_MOUNTDIR)
 mount_path.mkdir(parents=True, exist_ok=True)
 
 # %% [markdown]
-# ### Create session
+# ## 6. Connect
+#
+# - **What:** opens a `MongoClient`, checks the replica set has 1 `PRIMARY` and 2 `SECONDARY` members and starts from an empty `db.users`.
+# - **Why:** in Local mode the members announce container names the host cannot resolve, so the client must talk to the primary directly; in VPN mode those names resolve and the client can follow the whole replica set.
+# - **How:** Local: asks each member `hello` and connects with `directConnection=true` to the one that answers `isWritablePrimary`. VPN: a seed list of the three members with `replicaSet=replica_set_0`. Both use `w=majority`, so a write is confirmed once 2 of 3 members have it.
+# - 📄 [Connection string options](https://www.mongodb.com/docs/v7.0/reference/connection-string-options/) · [Write concern](https://www.mongodb.com/docs/v7.0/reference/write-concern/) · [hello](https://www.mongodb.com/docs/v7.0/reference/command/hello/) · [replSetGetStatus](https://www.mongodb.com/docs/v7.0/reference/command/replSetGetStatus/) · [PyMongo — MongoClient](https://pymongo.readthedocs.io/en/4.17.0/api/pymongo/mongo_client.html)
 
 # %%
 from pymongo import MongoClient
@@ -167,7 +195,12 @@ users_collection = db["users"]
 users_collection.drop()
 
 # %% [markdown]
-# ### Insert
+# ## 7. Fake data generator
+#
+# - **What:** creates a `Faker` instance.
+# - **Why:** realistic names, companies and coordinates without real personal data.
+# - **How:** `fake.unique.name()` never repeats a name within the run.
+# - 📄 [Faker](https://faker.readthedocs.io/en/master/)
 
 # %%
 from faker import Faker
@@ -175,7 +208,12 @@ from faker import Faker
 fake = Faker()
 
 # %% [markdown]
-# Builds a batch of 10000 realistic user documents with Faker and random (nested profile, tags, login_count, last_login), inserts them into `users_collection` with `insert_many`, and asserts the resulting document count matches the batch size.
+# ## 8. Insert 10 000 documents
+#
+# - **What:** builds 10 000 user documents with a nested `profile`, a `tags` array and counters, and inserts them in one call.
+# - **Why:** documents in one collection do not need a fixed schema and can nest objects and arrays.
+# - **How:** one `insert_many` call; the cell asserts the collection then holds exactly 10 000 documents.
+# - 📄 [insertMany](https://www.mongodb.com/docs/v7.0/reference/method/db.collection.insertMany/) · [PyMongo — Collection](https://pymongo.readthedocs.io/en/4.17.0/api/pymongo/collection.html)
 
 # %%
 # # %%timeit -n 2 -r 2
@@ -212,7 +250,12 @@ users_collection.insert_many(users_batch)
 assert users_collection.count_documents({}) == len(users_batch)
 
 # %% [markdown]
-# ### Query
+# ## 9. Filter
+#
+# - **What:** counts the active users with more than 500 logins.
+# - **Why:** a filter document combines conditions with an implicit AND.
+# - **How:** `{"active": True, "login_count": {"$gt": 500}}` with `count_documents`.
+# - 📄 [PyMongo — Collection](https://pymongo.readthedocs.io/en/4.17.0/api/pymongo/collection.html)
 
 # %%
 query = {"active": True, "login_count": {"$gt": 500}}
@@ -220,7 +263,12 @@ results = users_collection.find(query)
 print(f"Found {users_collection.count_documents(query)} highly active users.")
 
 # %% [markdown]
-# Runs a projected `find` for documents tagged `work`, returning only name, email, and profile.job while excluding _id, limited to the first 100 matches.
+# ## 10. Projection
+#
+# - **What:** returns name, email and `profile.job` of up to 100 users tagged `work`.
+# - **Why:** a projection sends back only the fields you need; matching a value inside an array needs no special operator.
+# - **How:** `find({"tags": "work"}, {"name": 1, "email": 1, "profile.job": 1, "_id": 0}).limit(100)`.
+# - 📄 [Project fields](https://www.mongodb.com/docs/v7.0/tutorial/project-fields-from-query-results/)
 
 # %%
 projection = {"name": 1, "email": 1, "profile.job": 1, "_id": 0}
@@ -229,7 +277,12 @@ for user in cursor:
     print(user)
 
 # %% [markdown]
-# Executes a five-stage MongoDB aggregation pipeline ($match, $group, $sort, $project, $limit) that averages `login_count` per `profile.job` and returns the top 100 professions by average logins.
+# ## 11. Aggregation pipeline
+#
+# - **What:** averages `login_count` per job for active users and keeps the top 100 jobs.
+# - **Why:** the server filters, groups and reshapes the data in one request instead of the client doing it.
+# - **How:** stages `$match` → `$group` (`$avg`, `$sum`) → `$sort` → `$project` → `$limit`.
+# - 📄 [$group](https://www.mongodb.com/docs/v7.0/reference/operator/aggregation/group/)
 
 # %%
 pipeline = [
@@ -259,14 +312,24 @@ for res in results:
     print(res)
 
 # %% [markdown]
-# Counts users located in the Northern Hemisphere by querying the nested `profile.location.lat` field for values greater than zero.
+# ## 12. Query a nested field
+#
+# - **What:** counts users with a positive latitude (northern hemisphere).
+# - **Why:** fields inside embedded documents are queried with dot notation.
+# - **How:** `{"profile.location.lat": {"$gt": 0}}`.
+# - 📄 [Documents — dot notation](https://www.mongodb.com/docs/v7.0/core/document/)
 
 # %%
 northern_users = users_collection.count_documents({"profile.location.lat": {"$gt": 0}})
 print(f"Users in Northern Hemisphere: {northern_users}")
 
 # %% [markdown]
-# Demonstrates collation-aware sorting: sorts user names ascending with locale `en` and strength 2 so ordering is case-insensitive rather than the default byte-wise Z-A-a-z order.
+# ## 13. Case-insensitive sort
+#
+# - **What:** sorts names with an English collation of strength 2.
+# - **Why:** without a collation the sort compares bytes, so the upper-case names (about half, see section 8) come before every mixed-case name; strength 2 compares base letters and accents but not case.
+# - **How:** `.sort("name", 1).collation({"locale": "en", "strength": 2})`.
+# - 📄 [Collation](https://www.mongodb.com/docs/v7.0/reference/collation/) · [PyMongo — Cursor](https://pymongo.readthedocs.io/en/4.17.0/api/pymongo/cursor.html)
 
 # %%
 # Standard Sort (Z-A-a-z) vs. Collation Sort (A-a-B-b...)
@@ -281,7 +344,12 @@ for user in cursor:
     print(user["name"])
 
 # %% [markdown]
-# ### Update
+# ## 14. Update one document
+#
+# - **What:** adds 1 to `login_count` of one user and checks the new value.
+# - **Why:** an update operator changes one field on the server without rewriting the document.
+# - **How:** `update_one({"_id": ...}, {"$inc": {"login_count": 1}})`, then `find_one` and an assertion.
+# - 📄 [$inc](https://www.mongodb.com/docs/v7.0/reference/operator/update/inc/)
 
 # %%
 # 1. Get a single user to test with
@@ -304,7 +372,12 @@ print(f"Change confirmed: {new_logins == initial_logins + 1}")
 assert new_logins == initial_logins + 1
 
 # %% [markdown]
-# Uses `find_one_and_update` with `ReturnDocument.AFTER` to increment login_count atomically while returning the updated document in a single round trip.
+# ## 15. Update and read in one step
+#
+# - **What:** increments the counter again and gets the updated document back.
+# - **Why:** one round trip instead of an update followed by a read.
+# - **How:** `find_one_and_update(..., return_document=ReturnDocument.AFTER)`.
+# - 📄 [findOneAndUpdate](https://www.mongodb.com/docs/v7.0/reference/method/db.collection.findOneAndUpdate/) · [PyMongo — Collection](https://pymongo.readthedocs.io/en/4.17.0/api/pymongo/collection.html)
 
 # %%
 from pymongo import ReturnDocument
@@ -317,7 +390,12 @@ updated_doc = users_collection.find_one_and_update(
 print(f"New count from single-step operation: {updated_doc['login_count']}")
 
 # %% [markdown]
-# Performs a bulk `update_many` that flags every document whose profile.job matches the case-insensitive regex for engineer with is_technical set to true, reporting result.modified_count.
+# ## 16. Update many documents
+#
+# - **What:** marks every user whose job contains "engineer" with `is_technical: true`.
+# - **Why:** `update_many` applies the same change to every match; documents gain the new field only where it is set.
+# - **How:** `$regex` with option `i` (case-insensitive) and `$set`; prints `modified_count`.
+# - 📄 [$regex](https://www.mongodb.com/docs/v7.0/reference/operator/query/regex/)
 
 # %%
 query = {"profile.job": {"$regex": ".*engineer.*", "$options": "i"}}
@@ -326,7 +404,12 @@ result = users_collection.update_many(query, update)
 print(f"Updated {result.modified_count} engineers.")
 
 # %% [markdown]
-# Deactivates the account with email example@user.com via `update_one`, setting active to false if that document exists.
+# ## 17. Update a missing document
+#
+# - **What:** tries to deactivate `example@user.com`.
+# - **Why:** when no document matches, `update_one` changes nothing and raises no error.
+# - **How:** `update_one` with `$set` and the default `upsert=False`.
+# - 📄 [updateOne](https://www.mongodb.com/docs/v7.0/reference/method/db.collection.updateOne/)
 
 # %%
 query = {"email": "example@user.com"}
@@ -334,7 +417,12 @@ new_values = {"$set": {"active": False}}
 users_collection.update_one(query, new_values)
 
 # %% [markdown]
-# ### Delete
+# ## 18. Delete the documents
+#
+# - **What:** deletes every document in `users` and checks 10 000 were deleted.
+# - **Why:** it completes the create, read, update and delete cycle.
+# - **How:** `delete_many({})` with an empty filter; the assertion compares `deleted_count`.
+# - 📄 [deleteMany](https://www.mongodb.com/docs/v7.0/reference/method/db.collection.deleteMany/)
 
 # %%
 delete_result = users_collection.delete_many({})
@@ -342,14 +430,24 @@ assert delete_result.deleted_count == len(users_batch)
 print(f"Deleted {delete_result.deleted_count} documents.")
 
 # %% [markdown]
-# Removes the `users` collection entirely from `db`, complementing the earlier document-level `delete_many` with collection-level cleanup.
+# ## 19. Drop the collection
+#
+# - **What:** removes the `users` collection itself.
+# - **Why:** `delete_many` empties a collection but keeps it and its indexes; dropping removes both.
+# - **How:** `db.drop_collection(users_collection)`.
+# - 📄 [PyMongo — Collection](https://pymongo.readthedocs.io/en/4.17.0/api/pymongo/collection.html)
 
 # %%
 db.drop_collection(users_collection)
 print("Deleted users collection.")
 
 # %% [markdown]
-# ### Explain
+# ## 20. Query plan with and without an index
+#
+# - **What:** inserts 100 000 students, explains the same query before and after creating an index on `promedio`.
+# - **Why:** without an index the server reads every document (`COLLSCAN`); with it, only the matching index entries (`IXSCAN`).
+# - **How:** `find(...).explain()`, then `create_index([("promedio", 1)])`; the cell asserts `COLLSCAN` before and `IXSCAN` after.
+# - 📄 [Explain results](https://www.mongodb.com/docs/v7.0/reference/explain-results/) · [PyMongo — Collection](https://pymongo.readthedocs.io/en/4.17.0/api/pymongo/collection.html)
 
 # %%
 import random
@@ -411,7 +509,12 @@ assert contains_stage(explain_find_idx["queryPlanner"]["winningPlan"], "IXSCAN")
 # )
 
 # %% [markdown]
-# Shows the alternative explain form by wrapping a find on `estudiantes` in a database command with verbosity executionStats, printing the resulting executionStats, then dropping the universidad database and closing the client.
+# ## 21. Explain as a command and clean up
+#
+# - **What:** runs the `explain` command with verbosity `executionStats`, then drops the `universidad` database and closes the client.
+# - **Why:** `executionStats` adds the documents and keys examined and the time taken, which the default explain omits.
+# - **How:** `db.command({"explain": {"find": ...}, "verbosity": "executionStats"})`.
+# - 📄 [explain command](https://www.mongodb.com/docs/v7.0/reference/command/explain/)
 
 # %%
 # Otra forma es definiendo un comando con explain que envuelve al find

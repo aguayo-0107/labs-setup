@@ -1,9 +1,9 @@
 # Use the previously generated spark-jupyter image as the base
-FROM spark-jupyter:3.5.7-scala2.12-java17-python3-ubuntu
+FROM spark-jupyter:4.1.2-scala2.13-java17-python3-ubuntu
 
 # Create virtual env for spark jobs
 RUN mkdir -p /opt/spark/venv-build && \
         cd /opt/spark/venv-build && \
         python3 -m venv --copies spark_job_env && \
-        /opt/spark/venv-build/spark_job_env/bin/pip install venv-pack pandas pyarrow faker faker-commerce mimesis && \
+        /opt/spark/venv-build/spark_job_env/bin/pip install --no-cache-dir venv-pack==0.2.0 faker-commerce==1.0.4 mimesis==22.2.0 pandas==2.3.3 pyarrow==25.0.1 numpy==2.2.6 faker==40.36.0 && \
         /opt/spark/venv-build/spark_job_env/bin/venv-pack -p spark_job_env -o spark_job_env.tar.gz

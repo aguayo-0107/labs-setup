@@ -13,7 +13,14 @@
 # ---
 
 # %% [markdown]
-# # Setup
+# # Spark lab — runs inside `spark-jupyter`
+#
+# ## 1. Parameters
+#
+# - **What:** default values for `NETWORK_MODE`, the VPN identity.
+# - **Why:** the same notebook serves Local mode (ports on `127.0.0.1`) and VPN mode (`<container>.<alias>.<domain>`).
+# - **How:** the cell is tagged `parameters`; papermill inserts an `injected-parameters` cell right after it with the `-p` values.
+# - 📄 [papermill — Parameterize](https://papermill.readthedocs.io/en/latest/usage-parameterize.html)
 
 # %% tags=["parameters"]
 # Local mode is the portable default; VPN mode publishes services on this host.
@@ -24,7 +31,11 @@ VPN_DOMAIN = "vpn.itam.mx"
 VPN_CLIENT_ALIAS = "mavasbel"
 
 # %% [markdown]
-# Validates the injected network parameters and derives `VPN_CLIENT_DOMAIN`: `NETWORK_MODE` must be lowercase `local` or `vpn`, VPN values must stay in the `10.15.20.*` subnet, and the client alias must be a valid single DNS label.
+# ## 2. Validate the parameters
+#
+# - **What:** lower-cases `NETWORK_MODE` and `VPN_CLIENT_ALIAS` and builds `VPN_CLIENT_DOMAIN = <alias>.<domain>`.
+# - **Why:** a wrong value must stop the notebook here, before any container changes.
+# - **How:** rejects any mode other than `local`/`vpn` and, in VPN mode, a host IP outside `10.15.20.*`, and an alias that is not lower-case letters, digits and inner hyphens.
 
 # %%
 NETWORK_MODE = NETWORK_MODE.strip().lower()
@@ -46,108 +57,47 @@ if (
 VPN_CLIENT_DOMAIN = f"{VPN_CLIENT_ALIAS}.{VPN_DOMAIN}"
 
 # %% [markdown]
-# Locates the `labs-setup` project root by searching upward for the directory that contains both `pyproject.toml` and the lab module folders, then changes the working directory into the `spark` module so relative asset paths resolve consistently.
+# ## 3. Cluster names inside the Docker network
+#
+# - **What:** the master (`spark-master-internal:6077`), the Driver's own name and ports (`spark-jupyter`, `4050`/`4051`), HDFS (`hdfs://namenode:8020`) and the folders mounted by `spark_infra`.
+# - **Why:** this notebook runs in the `spark-jupyter` container, so every name is a container on the same network and is identical in Local and VPN mode; the cell stops if it is run anywhere else.
+# - **How:** it checks that `/opt/spark/course-jars` exists. Hive support is left off on purpose: it would create a local Derby metastore whose lock survives an interrupted kernel.
 
 # %%
-# Resolve module assets from the labs-setup root.
 import os
 from pathlib import Path
 
-_start = Path.cwd().resolve()
-LABS_ROOT = next(
-    (
-        candidate
-        for candidate in (_start, *_start.parents)
-        if (candidate / "pyproject.toml").is_file()
-        and (candidate / "cassandra").is_dir()
-        and (candidate / "mongodb").is_dir()
-    ),
-    None,
-)
-if LABS_ROOT is None:
-    raise RuntimeError(
-        "Could not find the labs-setup root from the current directory"
-    )
-MODULE_DIR = LABS_ROOT / "spark"
-os.chdir(MODULE_DIR)
-print(f"Working directory: {MODULE_DIR}")
-
-# %% [markdown]
-# Declares the Spark cluster topology and mode-aware endpoints: image tags, master/worker names, client hosts (`127.0.0.1` in local mode, `*.VPN_CLIENT_DOMAIN` in VPN mode), Web UI ports, driver callback host (`host.docker.internal`, since executors run in Docker while this notebook driver runs on the host), executor environment paths, and the shared workspace mount.
-
-# %%
-DOCKER_INTERNAL_HOST = "host.docker.internal"
-SPARK_LOCAL_HDFS_HOST = "namenode.lvh.me"
-
-SPARK_DOCKER_BASE = "spark:3.5.7-scala2.12-java17-python3-ubuntu"
-SPARK_JUPYTER_LAB_DOCKER_TAG = "spark-jupyter:3.5.7-scala2.12-java17-python3-ubuntu"
-SPARK_JOB_VENV_DOCKER_TAG = "spark-job-venv:3.5.7-scala2.12-java17-python3-ubuntu"
-SPARK_JOB_VENV_BUILD_DIR = "/opt/spark/venv-build"
 SPARK_EXECUTOR_ENV_DIR = "/opt/spark/executor-env"
 
-SPARK_MASTER_NAME = "spark-master"
-SPARK_MASTER_HOSTNAME = SPARK_MASTER_NAME
-SPARK_MASTER_CLIENT_HOST = (
-    "127.0.0.1"
-    if NETWORK_MODE == "local"
-    else f"{SPARK_MASTER_NAME}.{VPN_CLIENT_DOMAIN}"
-)
-SPARK_MASTER_WUBUI_PORT = 6080
+SPARK_MASTER_HOST = "spark-master-internal"
 SPARK_MASTER_PORT = 6077
 
-SPARK_TOTAL_WORKERS = 3
-SPARK_WORKER_NAMES = [f"spark-worker-{i+1}" for i in range(SPARK_TOTAL_WORKERS)]
-SPARK_WORKER_HOSTNAMES = SPARK_WORKER_NAMES
-SPARK_WORKER_IPS = [
-    f"{name}.{VPN_CLIENT_DOMAIN}" if NETWORK_MODE == "vpn" else "127.0.0.1"
-    for name in SPARK_WORKER_NAMES
-]
-SPARK_WORKER_WEBUI_PORTS = [6080 + (i + 1) for i in range(SPARK_TOTAL_WORKERS)]
+# Workers reach the Driver by this container name.
+SPARK_DRIVER_HOST = "spark-jupyter"
+SPARK_DRIVER_PORT = 4050
+SPARK_BLOCK_MANAGER_PORT = 4051
 
-SPARK_WORKDIR = "/opt/spark/work-dir"
-
-JUPYTER_LAB_NAME = "spark-jupyter"
-JUPYTER_LAB_HOSTNAME = JUPYTER_LAB_NAME
-JUPYTER_LAB_CLIENT_HOST = (
-    "127.0.0.1"
-    if NETWORK_MODE == "local"
-    else f"{JUPYTER_LAB_NAME}.{VPN_CLIENT_DOMAIN}"
-)
-# Executors run in Docker while this notebook driver runs on the host.
-SPARK_DRIVER_HOST = DOCKER_INTERNAL_HOST
-JUPYTER_LAB_PORT = 6888
-JUPYTER_LAB_MONITOR_PORT = 4040
-JUPYTER_LAB_TOKEN = ""
-
-SPARK_SHARED_WORKSPACE = "shared-workspace"
-SPARK_SHARED_WORKSPACE_DIR = f"/opt/spark/{SPARK_SHARED_WORKSPACE}"
-
-# %% [markdown]
-# Derives the mode-aware HDFS URI: local mode reaches the NameNode through the split-horizon name `namenode.lvh.me`, VPN mode through `namenode.<VPN_CLIENT_DOMAIN>`, both on RPC port 8020.
-
-# %%
 HADOOP_NAMENODE_HOSTNAME = "namenode"
 HADOOP_NAMENODE_PORT = 8020
-SPARK_HDFS_HOST = (
-    SPARK_LOCAL_HDFS_HOST
-    if NETWORK_MODE == "local"
-    else f"{HADOOP_NAMENODE_HOSTNAME}.{VPN_CLIENT_DOMAIN}"
-)
-SPARK_HDFS_URI = f"hdfs://{SPARK_HDFS_HOST}:{HADOOP_NAMENODE_PORT}"
-
-# %% [markdown]
-# Creates the host-side shared workspace directory that is bind-mounted into the Spark containers and defines the `SPARK_DATADIR` HDFS path where the lab datasets will be written.
-
-# %%
-import os
-from pathlib import Path
-
-SPARK_HOST_SHARED_WORKSPACE = MODULE_DIR / "mount" / SPARK_SHARED_WORKSPACE
-SPARK_HOST_SHARED_WORKSPACE.mkdir(parents=True, exist_ok=True)
+SPARK_HDFS_URI = f"hdfs://{HADOOP_NAMENODE_HOSTNAME}:{HADOOP_NAMENODE_PORT}"
 SPARK_DATADIR = f"{SPARK_HDFS_URI}/spark-lab/data"
 
+# Mounted into every Spark container by spark_infra.
+SPARK_SHARED_WORKSPACE_DIR = Path("/opt/spark/shared-workspace")
+SPARK_JARS_DIR = Path("/opt/spark/course-jars")
+if not SPARK_JARS_DIR.is_dir():
+    raise RuntimeError("Run this notebook inside the spark-jupyter container (JupyterLab on port 6888)")
+# The lab uses only the explicit Iceberg `local` catalog and Delta paths.  It
+# deliberately does not enable Hive support: that would create a local Derby
+# metastore, whose lock state survives an interrupted notebook kernel.
+
 # %% [markdown]
-# ##### Cleaning Spark context
+# ## 4. Stop a leftover SparkContext
+#
+# - **What:** stops any SparkContext still alive in this kernel.
+# - **Why:** only one SparkContext can run per process, and `getOrCreate()` would otherwise reuse the old one with its old settings.
+# - **How:** `SparkContext._active_spark_context.stop()` if it is not `None`.
+# - 📄 [RDD programming guide](https://spark.apache.org/docs/4.1.2/rdd-programming-guide.html)
 
 # %%
 import pyspark
@@ -163,7 +113,12 @@ else:
     print("✨ No existing SparkContext to clean.")
 
 # %% [markdown]
-# # Spark session
+# ## 5. Create the SparkSession
+#
+# - **What:** checks the six Iceberg and Delta JARs, then connects to the Standalone master with the lab's settings.
+# - **Why:** Spark downloads nothing, so the JARs must already be there and unchanged; the session also tells the Executors which Python to use and where the Iceberg and Delta tables live.
+# - **How:** SHA-256 of each JAR in `/opt/spark/course-jars`; Driver reachable at `spark-jupyter:4050`; 512 MB Driver, 1 GB per Executor; Executors use `/opt/spark/executor-env/bin/python3`; `dfs.client.use.datanode.hostname=true`; Iceberg catalog `local` (type `hadoop`) under `/spark-lab/iceberg-warehouse` and Delta's SQL extension and catalog.
+# - 📄 [Spark — Configuration](https://spark.apache.org/docs/4.1.2/configuration.html) · [PySpark — Python package management](https://spark.apache.org/docs/4.1.2/api/python/tutorial/python_packaging.html) · [Iceberg — Spark configuration](https://iceberg.apache.org/docs/latest/spark-configuration/) · [Delta Lake — Quick start](https://docs.delta.io/latest/quick-start.html)
 
 # %%
 import sys
@@ -172,20 +127,15 @@ from pyspark.sql import SparkSession
 from datetime import datetime
 
 os.environ["HADOOP_USER_NAME"] = "hadoop"
-java_security_option = "-Djava.security.manager=allow"
-java_tool_options = os.environ.get("JAVA_TOOL_OPTIONS", "")
-if java_security_option not in java_tool_options.split():
-    os.environ["JAVA_TOOL_OPTIONS"] = f"{java_tool_options} {java_security_option}".strip()
 
-SPARK_DRIVER_PORT = 4050
-SPARK_BLOCK_MANAGER_PORT = 4051
-SPARK_JOB_ARCHIVE = SPARK_HOST_SHARED_WORKSPACE / "spark_job_env.tar.gz"
-SPARK_JARS_DIR = MODULE_DIR / "jars"
+SPARK_JOB_ARCHIVE = SPARK_SHARED_WORKSPACE_DIR / "spark_job_env.tar.gz"
 SPARK_JARS = {
-    "iceberg-spark-runtime-3.5_2.12-1.6.1.jar": "87e7184f31ef0caac415bbdfcf1bc4943346a58b98d747dc83434f7139e12acb",
-    "delta-spark_2.12-3.2.0.jar": "51d473537d1bc10c81f48b03d8e2a6b604e1b421a70835ec12e917a4245a31d5",
-    "delta-storage-3.2.0.jar": "58aab63eba7736fea9e03eafb0dde6704a34a70f570c1a69ab8e4012c25a95d4",
-    "antlr4-runtime-4.9.3.jar": "131a6594969bc4f321d652ea2a33bc0e378ca312685ef87791b2c60b29d01ea5",
+    "iceberg-spark-runtime-4.1_2.13-1.12.0.jar": "3123c3798af642dd537230923548e013ef41cc28b6626e5225808cf5670a0f82",
+    "delta-spark_2.13-4.3.1.jar": "ebf35a4383f0a653c3ee3c7882c0edcac2f846be31ac61af4b96ccfaaf36c171",
+    "delta-storage-4.3.1.jar": "577c12c7e371be4c041714fb48e88ad86e3c3512beea2bdaffbe7a4debf79718",
+    "delta-kernel-api-4.3.1.jar": "b081b818d6f5686c7d6406588af72c9f8baf6765a41ada8197364aef90a260e8",
+    "delta-kernel-defaults-4.3.1.jar": "27471cca7dd7a36289af2c8d52d2babb37e9e5a13cdaaea76730120f4c72e62f",
+    "delta-kernel-unitycatalog-4.3.1.jar": "a288342b7e53da34a608a1a227c8109aa4681fcb582da499ed19347f2193362b",
 }
 for jar_name, expected_sha256 in SPARK_JARS.items():
     jar_path = SPARK_JARS_DIR / jar_name
@@ -198,16 +148,12 @@ for jar_name, expected_sha256 in SPARK_JARS.items():
             f"expected {expected_sha256}, got {actual_sha256}"
         )
 
-SPARK_DRIVER_CLASSPATH = os.pathsep.join(
-    str(SPARK_JARS_DIR / jar_name) for jar_name in SPARK_JARS
-)
-SPARK_EXECUTOR_CLASSPATH = ":".join(
-    f"/opt/spark/course-jars/{jar_name}" for jar_name in SPARK_JARS
-)
+# Driver and executors read the same mounted JARs.
+SPARK_CLASSPATH = ":".join(str(SPARK_JARS_DIR / jar_name) for jar_name in SPARK_JARS)
 SPARK_ICEBERG_WAREHOUSE = f"{SPARK_HDFS_URI}/spark-lab/iceberg-warehouse"
 assert SPARK_JOB_ARCHIVE.is_file(), SPARK_JOB_ARCHIVE
 builder = (
-    SparkSession.builder.master(f"spark://{SPARK_MASTER_CLIENT_HOST}:{SPARK_MASTER_PORT}")
+    SparkSession.builder.master(f"spark://{SPARK_MASTER_HOST}:{SPARK_MASTER_PORT}")
     .appName(f"SparkLab_{datetime.now().strftime('%Y-%m-%d_%H:%M:%S.%f')}")
     .config("spark.driver.host", SPARK_DRIVER_HOST)
     .config("spark.driver.bindAddress", "0.0.0.0")
@@ -215,11 +161,10 @@ builder = (
     .config("spark.blockManager.port", SPARK_BLOCK_MANAGER_PORT)
     .config("spark.driver.memory", "512m")
     .config("spark.driver.maxResultSize", "256m")
-    .config("spark.task.maxDirectResultSize", "64m")
     .config("spark.sql.session.timeZone", "UTC")
     .config("spark.hadoop.dfs.client.use.datanode.hostname", "true")
-    .config("spark.driver.extraClassPath", SPARK_DRIVER_CLASSPATH)
-    .config("spark.executor.extraClassPath", SPARK_EXECUTOR_CLASSPATH)
+    .config("spark.driver.extraClassPath", SPARK_CLASSPATH)
+    .config("spark.executor.extraClassPath", SPARK_CLASSPATH)
     .config(
         "spark.executorEnv.PYSPARK_PYTHON",
         f"{SPARK_EXECUTOR_ENV_DIR}/bin/python3",
@@ -248,7 +193,7 @@ builder = (
         "spark.sql.catalog.spark_catalog",
         "org.apache.spark.sql.delta.catalog.DeltaCatalog",
     )
-    .enableHiveSupport()
+    .config("spark.sql.catalogImplementation", "in-memory")
 )
 spark = builder.getOrCreate()
 
@@ -257,7 +202,12 @@ print(f"Scala Version: {spark._jvm.scala.util.Properties.versionString()}")
 print("✅ Spark Session is now active.")
 
 # %% [markdown]
-# # Data generation
+# ## 6. Row generator
+#
+# - **What:** defines `batch_generator`, which yields fake rows (`id, worker, timestamp, first_name, last_name, email, phone, amount`) and records the host that produced each one; then derives the schema from one row.
+# - **Why:** the `worker` column shows where each row was created, and the schema is reused by the vectorized generator.
+# - **How:** imports happen inside the function because it is sent to the Executors; `socket.gethostname()` gives the container name.
+# - 📄 [Faker](https://faker.readthedocs.io/en/master/)
 
 # %%
 total_rows = 10000
@@ -299,7 +249,12 @@ df_column_types = spark.createDataFrame(
 print(f"✅ batch_generator schema: {df_column_types}")
 
 # %% [markdown]
-# Generates 10,000 rows distributed over 10 partitions with a Faker-based batch generator executed on the workers, writes them as CSV to HDFS, and displays per-worker/per-partition row counts to prove the work was truly distributed.
+# ## 7. Rows built on the Driver, written as CSV
+#
+# - **What:** builds 10,000 rows in the notebook, spreads them over 10 partitions and writes `faker.csv` to HDFS.
+# - **Why:** this is the baseline: `list(batch_generator(...))` runs on the Driver, so every row says `spark-jupyter`; only the write is distributed.
+# - **How:** `spark.createDataFrame(...).repartition(10)`, then `write.csv`; the table counts rows per `worker` and `spark_partition_id()`.
+# - 📄 [spark_partition_id](https://spark.apache.org/docs/4.1.2/api/python/reference/pyspark.sql/api/pyspark.sql.functions.spark_partition_id.html)
 
 # %%
 from pyspark.sql import functions as F
@@ -322,7 +277,12 @@ display(partition_stats.toPandas())
 
 
 # %% [markdown]
-# Regenerates the same dataset through the RDD API (`parallelize` + `mapPartitions`) and writes it as Parquet to HDFS, again displaying per-partition statistics for comparison with the DataFrame path.
+# ## 8. Rows built on the Executors (RDD), written as Parquet
+#
+# - **What:** creates the 10,000 rows on the workers and writes `faker.parquet`.
+# - **Why:** with `mapPartitions` the generator runs once per partition on the Executors, so the `worker` column now shows `spark-worker-1`, `-2` and `-3`.
+# - **How:** `sparkContext.parallelize(range(10000), 10).mapPartitions(batch_generator).toDF(...)`.
+# - 📄 [RDD.mapPartitions](https://spark.apache.org/docs/4.1.2/api/python/reference/api/pyspark.RDD.mapPartitions.html) · [Parquet files](https://spark.apache.org/docs/4.1.2/sql-data-sources-parquet.html)
 
 # %%
 from IPython.display import Markdown, display
@@ -344,7 +304,12 @@ partition_stats = (
 display(partition_stats.toPandas())
 
 # %% [markdown]
-# Demonstrates a vectorized pandas UDF: the generator runs as Arrow-batched Pandas DataFrames inside `spark.range`, producing the dataset in a third way, which is then written to Parquet under `/tmp` in HDFS with partition stats displayed.
+# ## 9. Rows built on the Executors (pandas UDF)
+#
+# - **What:** creates the rows a third way and writes them to `/tmp/faker_vectorized.parquet` in HDFS.
+# - **Why:** a pandas UDF receives whole batches as pandas objects through Apache Arrow instead of one row at a time.
+# - **How:** `spark.range(10000, numPartitions=10)` plus a `@pandas_udf` that returns a struct, expanded with `select("data.*")`.
+# - 📄 [pandas_udf](https://spark.apache.org/docs/4.1.2/api/python/reference/pyspark.sql/api/pyspark.sql.functions.pandas_udf.html)
 
 # %%
 from pyspark.sql import DataFrame
@@ -379,7 +344,12 @@ partition_stats = (
 display(partition_stats.toPandas())
 
 # %% [markdown]
-# Reads the vectorized Parquet output back from HDFS, asserts the row count matches, and displays the 10 most recent records plus the 10 most frequent first names as verification tables.
+# ## 10. Read back and check
+#
+# - **What:** reads the vectorized Parquet file, checks it has exactly 10,000 rows, and shows the latest rows and the most common first names.
+# - **Why:** it proves the write succeeded and gives a first DataFrame query.
+# - **How:** `spark.read.parquet`, `count()`, `sort(...desc())`, `groupBy("first_name").count()`.
+# - 📄 [Parquet files](https://spark.apache.org/docs/4.1.2/sql-data-sources-parquet.html)
 
 # %%
 from IPython.display import Markdown, display
@@ -410,7 +380,12 @@ display(
 )
 
 # %% [markdown]
-# Registers the verified DataFrame as a temporary view and runs a Spark SQL aggregation computing total amount and record count per first name, ordered by frequency.
+# ## 11. The same query in SQL
+#
+# - **What:** registers the DataFrame as the view `df_verify` and sums `amount` per first name with Spark SQL.
+# - **Why:** SQL and the DataFrame API run on the same engine; a temporary view lives only in this session.
+# - **How:** `createOrReplaceTempView` then `spark.sql("SELECT first_name, SUM(amount) ... GROUP BY first_name")`.
+# - 📄 [Spark SQL — Getting started (temporary views)](https://spark.apache.org/docs/4.1.2/sql-getting-started.html)
 
 # %%
 from IPython.display import Markdown, display
@@ -428,7 +403,12 @@ df_sparkql = spark.sql("""
 display(df_sparkql.toPandas())
 
 # %% [markdown]
-# # Delta Lake and Iceberg validation
+# ## 12. Delta Lake and Iceberg
+#
+# - **What:** writes 100 rows as a Delta table at `/tmp/delta-products` and as the Iceberg table `local.default.course_products`, and checks both read back 100 rows.
+# - **Why:** it confirms the bundled connectors work end to end against HDFS.
+# - **How:** `write.format("delta").save(...)` and `CREATE TABLE ... USING iceberg AS SELECT ...`.
+# - 📄 [Delta Lake — Quick start](https://docs.delta.io/latest/quick-start.html) · [Iceberg — Spark configuration](https://iceberg.apache.org/docs/latest/spark-configuration/)
 
 # %%
 delta_path = f"{SPARK_HDFS_URI}/tmp/delta-products"
@@ -444,7 +424,12 @@ assert spark.table("local.default.course_products").count() == 100
 print("✅ Delta Lake and Iceberg writes validated")
 
 # %% [markdown]
-# Queries the Parquet file directly with Spark SQL (no temporary view) using the same aggregation, then stops the Spark session to release the cluster.
+# ## 13. SQL directly on a file, then stop
+#
+# - **What:** runs the same aggregation on the Parquet file without creating a view, then stops the session.
+# - **Why:** Spark SQL can query a file path directly; stopping the session frees the workers' cores and memory for the next notebook.
+# - **How:** ``SELECT ... FROM parquet.`hdfs://namenode:8020/tmp/faker_vectorized.parquet` `` and `spark.stop()`.
+# - 📄 [Run SQL on files directly](https://spark.apache.org/docs/4.1.2/sql-data-sources-load-save-functions.html)
 
 # %%
 from IPython.display import Markdown, display

@@ -1,0 +1,12 @@
+# Athena-compatible gateway for the AWS lab. Build context: labs-setup root.
+FROM python:3.10.18-slim-bookworm
+
+WORKDIR /opt/athena-gateway
+COPY aws/athena-gateway.requirements.txt requirements.txt
+RUN pip install --no-cache-dir --no-deps -r requirements.txt \
+    && python -c "import boto3, pyhive.hive, thrift_sasl, puresasl"
+COPY athena_gateway ./athena_gateway
+
+USER nobody
+EXPOSE 8080
+CMD ["python", "-m", "athena_gateway"]
